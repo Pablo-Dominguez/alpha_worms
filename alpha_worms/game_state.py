@@ -39,7 +39,7 @@ class GameState:
         self.n_features = k
         tensor = np.zeros((board_shape, self.n_features), dtype=np.float32)
         
-        # Initialize each layer of the tensor
+        # Initialize each layer of the tensor. Pending: parameters
         for i in range(self.n_features):
             if i < self.n_pieces: # pieces features
                 tensor[-1, i] = -1*(21+i) # negative values for unavailable pieces. Set piece on board slot.
@@ -55,43 +55,49 @@ class GameState:
         # Set all dices to 0 (fixed) and available.
         all_dices = (-1)*np.random.randint(1, 7,8)
         for i in range(self.n_dices):
-            self.set_dice_value(i, all_dices[i])
+            self.set_dice_value(i, all_dices[i],reset=True)
     
     def throw_dices(self):
         # Throwing the dices and update the tensor accordingly.
-        ## Need to throw all dices at once
-        
         # Get fixed dices
         dices = self.get_dices()
         for dice in range(self.n_dices):
-            if np.all(dices[dice,:] > 0):
+            if np.all(dices[dice,:] >= 0):
                 pass
             elif np.any(dices[dice,:] < 0):
                 # Set available dices to new random values
                 new_dice_value = (-1)*np.random.randint(1, 7)
-                self.set_dice_value(dice, new_dice_value)
+                self.set_dice_value(dice, new_dice_value, reset=True)
                 
                 
     def get_dices(self):
         # Get the current state of the dices.
         return self.tensor[-self.n_dices-1:-1, self.n_pieces:self.n_pieces+6]
-    
-    def set_dice_value(self, dice, value):
+
+    def set_dice_value(self, dice, value, reset=False):
         # Set the value of a specific dice.
         if dice < 0 or dice >= self.n_dices:
             raise ValueError("Invalid dice index.")
-        if value < -6 or value > 0:
+        if value < -6:
             raise ValueError("Invalid dice value.")
+        if reset:
+            if value > 0 :
+                raise ValueError("Resetting a dice value should be negative.")
+            self.tensor[-self.n_dices-1+dice, self.n_pieces:self.n_pieces+6] = 0 # Reset the dice value
         self.tensor[-self.n_dices-1+dice, self.n_pieces+abs(value)-1] = value
 
-    def select_dices(self, dice_indices):
+    def select_dices(self, dice_value):
         
-        if not np.all(np.isin(dice_indices, range(self.n_dices))):
-            raise ValueError("Invalid dice indices.")
-        for index in dice_indices:
-            dice_value = self.tensor[-self.n_dices-1+index, -7:-1]
-            if np.any(dice_value > 0):
-                raise ValueError("The dice is already selected.")
-            else:
-                # If the dice is not selected, select it.
-                self.tensor[-self.n_dices-1+index, self.n_pieces:self.n_pieces+6] = -1*dice_value
+        dices = self.get_dices()
+        # Check if the dice value is valid.
+        if np.any(dices[:,dice_value-1] > 0):
+            raise ValueError("The value is already selected.")
+        else:
+            # Get dice indexes where the dice currently has the value.
+            dice_indexes = np.where((dices < 0) & (dices == -dice_value)) # could check if second index is equal to dice_value
+            if np.all(dice_indexes[1]==dice_value-1):
+                print("Selecting dice value:", dice_value)
+                # Select the dice.
+                for i in range(len(dice_indexes[0])):
+                    dice = dice_indexes[0][i]
+                    self.set_dice_value(dice, dice_value)
