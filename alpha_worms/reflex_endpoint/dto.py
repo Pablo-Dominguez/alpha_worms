@@ -70,19 +70,19 @@ def get_dto(step: int = 1):
         dice_entry = {k:v["after"] for k,v in dice_entry.items()}
 
         board_entry = [entry for entry in log_entries[:step] if any('board' in key for key in entry["changes"].keys())][-1]
-        board_entry = {k:v["after"] for k,v in board_entry.items()}
+        board_entry = {k:v["after"] for k,v in board_entry['changes'].items()}
 
     elif line_entry['action'] == 'select_dice':
         dice_entry = line_entry['changes']
         dice_entry = {k:v["before"] for k,v in dice_entry.items()}
         board_entry = [entry for entry in log_entries[:step] if any('board' in key for key in entry["changes"].keys())][-1]
-        board_entry = {k:v["after"] for k,v in board_entry.items()}
+        board_entry = {k:v["after"] for k,v in board_entry['changes'].items()}
 
     elif line_entry['action'] in ['fetch_from_board', 'fetch_from_stack']:
         board_entry = line_entry['changes']
         board_entry = {k:v["before"] for k,v in board_entry.items()}
         dice_entry = [entry for entry in log_entries[:step] if any('dices' in key for key in entry["changes"].keys())][-1]
-        dice_entry = {k:v["after"] for k,v in dice_entry.items()}
+        dice_entry = {k:v["after"] for k,v in dice_entry['changes'].items()}
     
     dice_map = Dices(
         **dice_entry
@@ -132,4 +132,5 @@ if __name__ == "__main__":
         print("DTO Board:", dto_board)
         print("Allowed Moves:", allowed_moves)
         step += 1
+        print('-----------------------'*2)
         input("Press Enter to continue to the next step...")
