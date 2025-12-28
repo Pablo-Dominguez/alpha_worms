@@ -1,5 +1,5 @@
 
-from reflex_endpoint.models import Dices, Pieces
+from alpha_worms.reflex_endpoint.models import Dices, Pieces
 import json
 import ast
 
@@ -45,7 +45,7 @@ def get_dto(step: int = 1):
     3. After rolling dices: Select dice.
     4. After selecting a dice, if available pieces: Select piece OR Roll again.
 
-    Total actions: 34
+    Total actions possible: 25
 
 
     """
