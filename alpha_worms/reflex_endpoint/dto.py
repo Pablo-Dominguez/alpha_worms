@@ -94,12 +94,12 @@ def get_dto(step: int = 1):
 
     return dice_map, board_map
 
-def get_allowed_moves(step: int = 1):
+def get_allowed_moves(step: int = 1, dev_mode: bool = False, dice_map: Dices = None, board_map: Pieces = None):
     """
     This method is currently a placeholder.
     """
-
-    dice_map, board_map = get_dto(step)
+    if dev_mode:
+        dice_map, board_map = get_dto(step)
     dice_map, board_map = dice_map.model_dump(), board_map.model_dump()
 
     total_selected = sum([x if x != 6 else 5 for x in dice_map["selected_dices"]]) if 6 in dice_map["selected_dices"] else 0
@@ -122,15 +122,15 @@ def get_allowed_moves(step: int = 1):
     return piece_moves + dice_moves + roll_again
 
 ## make a method so I can test this in console, changing step everytime I hit enter
-if __name__ == "__main__":
-    step = 0
-    while True:
-        dto_dice, dto_board = get_dto(step)
-        allowed_moves = get_allowed_moves(step)
-        print(f"Step: {step}")
-        print("DTO Dices:", dto_dice)
-        print("DTO Board:", dto_board)
-        print("Allowed Moves:", allowed_moves)
-        step += 1
-        print('-----------------------'*2)
-        input("Press Enter to continue to the next step...")
+# if __name__ == "__main__":
+#     step = 0
+#     while True:
+#         dto_dice, dto_board = get_dto(step)
+#         allowed_moves = get_allowed_moves(step)
+#         print(f"Step: {step}")
+#         print("DTO Dices:", dto_dice)
+#         print("DTO Board:", dto_board)
+#         print("Allowed Moves:", allowed_moves)
+#         step += 1
+#         print('-----------------------'*2)
+#         input("Press Enter to continue to the next step...")
