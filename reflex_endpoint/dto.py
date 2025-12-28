@@ -3,7 +3,7 @@ from reflex_endpoint.models import Dices, Pieces
 import json
 import ast
 
-def get_game_log():
+def parse_game_log():
     """
     Read game_activity.log and return its content as a list of dicts
     """
@@ -26,28 +26,64 @@ def get_game_log():
 
 def get_dto(step: int = 1):
     """
-    This method is currently a placeholder.
-
     Initially, create a mock file saving outputs from the models of reflex game and use it.
+
+    Currently, parsing the game 'steps' from the log file and returning the corresponding DTOs.
+    Eventually, will need to properly define when in the game you get a step, i.e., a decision point.
+
+    Decisions:
+    - Select a dice.
+    - Select a piece.
+    - Roll again.
+
+    1. When dices are selected, a decision was taken.
+    2. When a piece is moved, a decision was taken.
+
+    OR:
+    1. After resetting the game: Select dice.
+    2. After end of turn: Select dice.
+    3. After rolling dices: Select dice.
+    4. After selecting a dice, if available pieces: Select piece OR Roll again.
+
+    Total actions: 34
+
 
     """
 
-    log_entries = get_game_log()
+    log_entries = parse_game_log()
     ## MIND this entries do not correspond to the same step over the game. 
     # First change in dices are not in the same step as first change in board.
+
     line_entry = log_entries[step]
-    if any('dice' in key for key in line_entry["changes"].keys()):
-        dice_entry = line_entry
-        board_entry = [entry for entry in log_entries[:step] if any('board' in key for key in entry["changes"].keys())]
-        board_entry = board_entry[-1] if board_entry else None
-    elif any('board' in key for key in line_entry["changes"].keys()):
-        board_entry = line_entry
-        dice_entry = [entry for entry in log_entries[:step] if any('dice' in key for key in entry["changes"].keys())]
-        dice_entry = dice_entry[-1] if dice_entry else None
 
-    dice_entry = {k:v["after"] for k,v in dice_entry["changes"].items()} if dice_entry else {}
-    board_entry = {k:v["after"] for k,v in board_entry["changes"].items()} if board_entry else {}
+    if line_entry['action'] in ['reset_game', 'end_turn']:
+        if 'dices' in line_entry['changes']:
+            dice_entry = line_entry['changes']
+            board_entry = log_entries[step+1]['changes']
+        else:
+            board_entry = line_entry['changes']
+            dice_entry = log_entries[step-1]['changes']
+        dice_entry = {k:v["after"] for k,v in dice_entry.items()}
+        board_entry = {k:v["after"] for k,v in board_entry.items()}
+    elif line_entry['action'] == 'throw_dices':
+        dice_entry = line_entry['changes']
+        dice_entry = {k:v["after"] for k,v in dice_entry.items()}
 
+        board_entry = [entry for entry in log_entries[:step] if any('board' in key for key in entry["changes"].keys())][-1]
+        board_entry = {k:v["after"] for k,v in board_entry.items()}
+
+    elif line_entry['action'] == 'select_dice':
+        dice_entry = line_entry['changes']
+        dice_entry = {k:v["before"] for k,v in dice_entry.items()}
+        board_entry = [entry for entry in log_entries[:step] if any('board' in key for key in entry["changes"].keys())][-1]
+        board_entry = {k:v["after"] for k,v in board_entry.items()}
+
+    elif line_entry['action'] in ['fetch_from_board', 'fetch_from_stack']:
+        board_entry = line_entry['changes']
+        board_entry = {k:v["before"] for k,v in board_entry.items()}
+        dice_entry = [entry for entry in log_entries[:step] if any('dices' in key for key in entry["changes"].keys())][-1]
+        dice_entry = {k:v["after"] for k,v in dice_entry.items()}
+    
     dice_map = Dices(
         **dice_entry
     )
@@ -71,8 +107,11 @@ def get_allowed_moves(step: int = 1):
     ## Get allowed dices
     dice_moves = [0 if (x in dice_map["selected_dices"] or dice_map["grey_out_dices"]) else 1 for x in dice_map["dices"]]
 
-    ## Get allowed pieces
+    ## Check if can roll again
 
+    roll_again = [dice_map['grey_out_dices']]
+
+    ## Get allowed pieces
     last_piece_opp_stack = board_map[f"player0{other_player}_stack"][-1] if board_map[f"player0{other_player}_stack"] else -1
     
     piece_moves = [1 if (
@@ -80,4 +119,17 @@ def get_allowed_moves(step: int = 1):
         (x == last_piece_opp_stack and x == total_selected)
         ) else 0 for x in range(21,37)]
 
-    return piece_moves + dice_moves
+    return piece_moves + dice_moves + roll_again
+
+## make a method so I can test this in console, changing step everytime I hit enter
+if __name__ == "__main__":
+    step = 0
+    while True:
+        dto_dice, dto_board = get_dto(step)
+        allowed_moves = get_allowed_moves(step)
+        print(f"Step: {step}")
+        print("DTO Dices:", dto_dice)
+        print("DTO Board:", dto_board)
+        print("Allowed Moves:", allowed_moves)
+        step += 1
+        input("Press Enter to continue to the next step...")
