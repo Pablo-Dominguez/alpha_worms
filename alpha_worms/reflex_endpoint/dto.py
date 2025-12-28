@@ -1,7 +1,11 @@
 
 from alpha_worms.reflex_endpoint.models import Dices, Pieces
-import json
 import ast
+
+class GameDTO:
+    def __init__(self, dice_map: Dices, board_map: Pieces):
+        self.dice_map = dice_map
+        self.board_map = board_map
 
 def parse_game_log():
     """
