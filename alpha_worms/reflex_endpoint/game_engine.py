@@ -8,6 +8,25 @@ class RawEngine:
     def __init__(self):
         pass
 
+    def get_initial_state(self) -> GameDTO:
+        """Generates the initial game state."""
+        dices: list[int] = [int(x) for x in np.random.randint(1, 7, size=8)]
+        available_dices: list[int] = [0,1,2,3,4,5,6,7]
+        selected_dices: list[int] = []
+        dices_model = Dices(dices=dices,
+                             available_dices=available_dices,
+                             selected_dices=selected_dices,
+                             grey_out_dices = 0)
+
+        pieces_model = Pieces(
+            board_pieces=list(range(21, 37)),
+            current_player=1,
+            player01_stack=[],
+            player02_stack=[]
+        )
+
+        return GameDTO(dices_model, pieces_model)
+
     def is_terminal(self, game_dto: GameDTO) -> bool:
         """
         Check if the game has reached a terminal state (i.e., one player has won).
@@ -46,14 +65,13 @@ class RawEngine:
         
         return GameDTO(new_dices_model, old_pieces_version)
 
-    def fetch_from_board(self, game_dto: GameDTO, piece_idx: int):
+    def fetch_from_board(self, game_dto: GameDTO, piece_number: int):
         """
         Given a board state and a piece index, takes the piece from the board 
         into the current player's stack.
         """
         old_dice_model = game_dto.dice_map.model_copy(deep=True)  
         new_pieces_version = game_dto.board_map.model_copy(deep=True)
-        piece_number = piece_idx + 21  # Adjusting index to match piece numbering
 
         if piece_number in new_pieces_version.board_pieces:
             # Remove the piece from the board.
@@ -85,46 +103,67 @@ class RawEngine:
 
         current_stack = old_pieces_version.player02_stack if old_pieces_version.current_player == 2 else old_pieces_version.player01_stack
         opp_stack = old_pieces_version.player01_stack if old_pieces_version.current_player == 2 else old_pieces_version.player02_stack
-        if piece_number in current_stack:
+        if piece_number in current_stack and piece_number == current_stack[-1]:
+            # Place the piece on the board
             current_stack.remove(piece_number)
             old_pieces_version.board_pieces.append(piece_number)
             old_pieces_version.board_pieces.sort()
             if old_pieces_version.board_pieces[-1] != piece_number:
                 old_pieces_version.board_pieces = old_pieces_version.board_pieces[:-1]
-        elif piece_number in opp_stack:
+        elif piece_number in opp_stack and piece_number == opp_stack[-1]:
             # Steal the piece from the opponent's stack
             opp_stack.remove(piece_number)
             current_stack.append(piece_number)
         else:
-            raise("Piece not in players stacks.")
+            # raise("Piece not in players stacks.")
+            pass
         
         return self.end_turn(GameDTO(old_dice_model, old_pieces_version))
     
-    # def throw_dices(self, game_dto: GameDTO):
-    #     """Simulates throwing the dices and updates their values."""
+    def select_dice(self, game_dto: GameDTO, dice_index: int):
+        """Selects a dice from the available dices.""" 
+        new_dice_model = game_dto.dice_map.model_copy(deep=True)
 
-    #     # IMPORTANT: Use .model_copy(deep=True) or else both variables will point to the new data
-    #     old_dices_version = game_dto.dice_map.model_copy(deep=True)
+        if dice_index in new_dice_model.available_dices and new_dice_model.grey_out_dices == 0:
+            # Find indexes of available dices with the given value
+            dice_value = new_dice_model.dices[dice_index]
+            available_indexes = [i for i, value in enumerate(new_dice_model.dices) if value == dice_value and i in new_dice_model.available_dices]
+            new_available_idxs = [i for i in new_dice_model.available_dices if i not in available_indexes]
+            # Update available_dices and selected_dices
+            new_dice_model.available_dices = new_available_idxs
+            new_dice_model.selected_dices = new_dice_model.selected_dices + [dice_value]*len(available_indexes)
 
-    #     old_dices_version.dices_model.grey_out_dices = 0
 
-    #     new_dices =[(x,int(y)) for x,y in zip(self.dices_model.available_dices,np.random.randint(1, 7, size=len(self.dices_model.available_dices)))]
-    #     total_dices = [(self.dices_model.dices[k] if k not in self.dices_model.available_dices else [y for (x,y) in new_dices if k==x][0]) 
-    #                    for k in range(8)]
-    #     self.set_dices_model(total_dices,'dices') 
+        return GameDTO(new_dice_model, game_dto.board_map)
+    
+    def throw_dices(self, game_dto: GameDTO):
+        """Simulates throwing the dices and updates their values."""
+
+        # IMPORTANT: Use .model_copy(deep=True) or else both variables will point to the new data
+        new_dices_version = game_dto.dice_map.model_copy(deep=True)
+        new_pieces_version = game_dto.board_map.model_copy(deep=True)
+
+        new_dices_version.grey_out_dices = 0  # Reset grey out status
+
+        new_dices =[(x,int(y)) for x,y in zip(new_dices_version.available_dices,np.random.randint(1, 7, size=len(new_dices_version.available_dices)))]
+        total_dices = [(new_dices_version.dices[k] if k not in new_dices_version.available_dices else [y for (x,y) in new_dices if k==x][0]) 
+                       for k in range(8)]
+        # Update dices with new values
+        new_dices_version.dices = total_dices
 
 
-    #     ## If after throwing, no available dices to get, turn is over
-    #     availables_ls = [x for x in self.dices_model.available_dices if self.dices_model.dices[x] not in self.dices_model.selected_dices]
-    #     if not availables_ls: ## need to drop a piece
-    #         # get current player last stack piece
-    #         player_stack = self.pieces_model.player01_stack if self.pieces_model.current_player ==1 else self.pieces_model.player02_stack
-    #         if player_stack:
-    #             piece_to_drop = player_stack[-1]
-    #             self.fetch_from_stack(piece_to_drop)
-    #         else:
-    #             self.end_turn()
-    #     self.toggle_allowed_moves()
+        ## If after throwing, no available dices to get, lose a piece and turn is over
+        availables_ls = [x for x in new_dices_version.available_dices if new_dices_version.dices[x] not in new_dices_version.selected_dices]
+        if not availables_ls: ## need to drop a piece
+            # get current player last stack piece
+            player_stack = new_pieces_version.player01_stack if new_pieces_version.current_player ==1 else new_pieces_version.player02_stack
+            if player_stack:
+                piece_to_drop = player_stack[-1]
+                return self.fetch_from_stack(GameDTO(new_dices_version, new_pieces_version), piece_to_drop)
+            else:
+                return self.end_turn(GameDTO(new_dices_version, new_pieces_version))
+        else:
+            return GameDTO(new_dices_version, new_pieces_version)
 
 
 
@@ -173,12 +212,25 @@ class GameEngine:
         if allowed_moves[action] == 0:
             raise ValueError("Action not allowed in the current state.")
         else:
-            # Placeholder for state transition logic
-            # In a real implementation, this would modify the game state based on the action taken
-            new_dice_map = game_dto.dice_map.model_copy(deep=True)  # This should be updated based on action
-            new_board_map = game_dto.board_map.model_copy(deep=True)  # This should be updated based on action
+            if action < 16:
+                # Fetch from board
+                piece_number = action + 21  # Adjusting index to match piece numbering
+                if piece_number in game_dto.board_map.board_pieces:
+                    return RawEngine().fetch_from_board(GameDTO(game_dto.dice_map, game_dto.board_map), piece_number)
+                else:
+                    return RawEngine().fetch_from_stack(GameDTO(game_dto.dice_map, game_dto.board_map), piece_number)
+            elif action < 24:
+                # Select dice
+                dice_number = action - 16  # Adjusting index to match dice numbering
+                return RawEngine().select_dice(GameDTO(game_dto.dice_map, game_dto.board_map), dice_number)
+            else:
+                # Roll again
+                return RawEngine().throw_dices(GameDTO(game_dto.dice_map, game_dto.board_map))
 
-            return GameDTO(new_dice_map, new_board_map)
-
-    def end_game(self):
-        pass
+    def to_tensor(self, game_dto: GameDTO):
+        """
+        Converts the game state into a tensor representation for ML models.
+        The tensor shape is (25,), corresponding to the allowed moves.
+        """
+        allowed_moves = self.get_allowed_moves(game_dto)
+        return np.array(allowed_moves, dtype=np.float32)
