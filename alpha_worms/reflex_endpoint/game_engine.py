@@ -241,26 +241,3 @@ class GameEngine(RawEngine):
             else:
                 # Roll again
                 return RawEngine().throw_dices(GameDTO(dice_map=game_dto.dice_map, board_map=game_dto.board_map))
-
-    def to_tensor(self, game_dto: GameDTO):
-        """
-        Converts the game state into a tensor representation for ML models.
-        The tensor shape is (33,), corresponding to the players stacks + one board slot.
-        The features layers are:
-            Pieces related: 32
-                - Binary location:16
-                - Binary availability: 16
-            Type of worm: 4 types
-                - Binary location: 4
-            Dices related: 16
-                - Selected normalized scalar mask: 8 (n selected / total_dices)
-                - Availables normalized scalar mask: 8 (n available / total_dices)
-            Game status:
-                - Binary mask for indicating worm selected: 1
-                - Total dices sum normalized scalar: 1 (total selected / max possible)
-                - Current player binary: 1 (1 or 0)
-        Total features: 33
-
-        """
-        allowed_moves = self.get_allowed_moves(game_dto)
-        return np.array(allowed_moves, dtype=np.float32)
