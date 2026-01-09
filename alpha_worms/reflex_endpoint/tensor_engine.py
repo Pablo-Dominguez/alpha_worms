@@ -1,6 +1,7 @@
 
 from alpha_worms.reflex_endpoint.models import Dices, Pieces
 from alpha_worms.reflex_endpoint.dto import GameDTO
+from alpha_worms.reflex_endpoint.game_engine import GameEngine
 import numpy as np
 
 class TensorEngine:
@@ -22,15 +23,20 @@ class TensorEngine:
                 # make whole board binary mask indicating dice is available
                 tensor[:, 36+i] = len(game_dto.dice_map.available_dices) / len(game_dto.dice_map.dices)
             elif value in game_dto.dice_map.selected_dices and i not in game_dto.dice_map.available_dices:
+                # make whole board binary mask indicating dice is selected
                 tensor[:, 44+i] = len(game_dto.dice_map.selected_dices) / len(game_dto.dice_map.dices)
         
-        # --- POPULATE REMAINING DICE FEATURES ---
+        # --- POPULATE REMAINING GAME FEATURES ---
         # binary worm presence
         tensor[:, 52] = 1.0 if 6 in game_dto.dice_map.selected_dices else 0.0
         # normalized scalar for total selected dice value
         tensor[:, 53] = sum([x if x != 6 else 5 for x in game_dto.dice_map.selected_dices]) / (5 * len(game_dto.dice_map.dices))
+        # turn indicator
+        tensor[:, 54] = game_dto.board_map.current_player - 1
+        # Game history features can be added here as needed 
 
-        # --- POPULATE FIRST 16 LAYERS (Piece Locations) ---
+        available_pieces = GameEngine().get_allowed_moves(game_dto)[:16]
+        # --- POPULATE PIECE FEATURES ---
         for piece_number in range(21, 37):
             # 1. Piece locations
             if piece_number in game_dto.board_map.board_pieces:
@@ -42,7 +48,12 @@ class TensorEngine:
                 idx = game_dto.board_map.player02_stack.index(piece_number)
                 tensor[16+idx, piece_number-21] = 1.0
             # 2. Piece availability
-                
-        # Slot 32 remains 0.0 for these 16 layers unless a piece is "in transition"
+            available = available_pieces[piece_number-21]
+            tensor[:, 16 + (piece_number-21)] = available
+        # --- Worm values ---
+        for i in range(4):
+            # Join the location planes:
+            new_layer = np.maximum.reduce([layer for layer in tensor[:, 4*i:4*(i+1)]], axis=1)
+            tensor[:, 32 + i] = new_layer
 
         return tensor
