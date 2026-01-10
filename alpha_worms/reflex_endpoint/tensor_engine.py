@@ -18,16 +18,25 @@ class TensorEngine:
         # The board has 33 slots (0-32). The first 16 slots (0-15) are the first player's stack
         # The next 16 slots (16-31) are the second player's stack, and slot 32 is for pieces on the board.
         # Features: 55 layers
+        # Feature order breakdown:
+        # 0-15: Piece locations for pieces 21-36 (16 pieces)
+        # 16-31: Piece availability for pieces 21-36 (16 pieces)
+        # 32-35: Worm values (1-4)
+        # 36-43: Dice availability (8 dice)
+        # 44-51: Dice selection (8 dice)
+        # 52: Binary worm presence (1 if worm selected, else 0)
+        # 53: Normalized total selected dice value
+        # 54: Turn indicator (current player - 1)
         tensor = np.zeros((55, 33), dtype=np.float32)
 
         # --- POPULATE DICE FEATURES ---
         for i, value in enumerate(game_dto.dice_map.dices): # availability
             if i in game_dto.dice_map.available_dices:
                 # make whole board binary mask indicating dice is available
-                tensor[36+i, :] = len(game_dto.dice_map.available_dices) / len(game_dto.dice_map.dices)
+                tensor[36+i, :] = len([x for x in game_dto.dice_map.available_dices if x == i]) / len(game_dto.dice_map.dices)
             elif value in game_dto.dice_map.selected_dices and i not in game_dto.dice_map.available_dices:
                 # make whole board binary mask indicating dice is selected
-                tensor[44+i, :] = len(game_dto.dice_map.selected_dices) / len(game_dto.dice_map.dices)
+                tensor[44+i, :] = len([x for x in game_dto.dice_map.selected_dices if x == value]) / len(game_dto.dice_map.dices)
 
         # --- POPULATE REMAINING GAME FEATURES ---
         # binary worm presence
@@ -56,7 +65,7 @@ class TensorEngine:
         # --- Worm values ---
         for i in range(4):
             # Join the location planes: Maybe this should be a summed mask
-            new_layer = np.maximum.reduce([layer for layer in tensor[4*i:4*(i+1), :]], axis=0)
+            new_layer = (i+1)*np.sum([layer for layer in tensor[4*i:4*(i+1), :]], axis=0)/ 16.0
             tensor[32 + i, :] = new_layer
 
         return tensor
