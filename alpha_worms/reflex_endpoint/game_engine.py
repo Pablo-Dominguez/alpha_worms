@@ -2,6 +2,7 @@
 from alpha_worms.reflex_endpoint.models import Dices, Pieces
 from alpha_worms.reflex_endpoint.dto import GameDTO
 import numpy as np
+from alpha_worms.reflex_endpoint.tensor_engine import TensorEngine
 
 
 class RawEngine:
@@ -45,6 +46,8 @@ class RawEngine:
             p1_sum = sum([(piece_number - 21) // 4 for piece_number in p1_stack])
             p2_sum = sum([(piece_number - 21) // 4 for piece_number in p2_stack])
             return 1 if p1_sum > p2_sum else (2 if p2_sum > p1_sum else 0)
+        else:
+            return 0  # Game is not over yet
     
     def get_total_selected(self, game_dto: GameDTO) -> int:
         """Calculates the total value of selected dices."""
@@ -185,6 +188,7 @@ class RawEngine:
 class GameEngine(RawEngine):
     def __init__(self):
         super().__init__()
+        self.game_size = 25  # Total number of possible actions/moves
     
     def get_allowed_moves(self, game_dto: GameDTO):
         """
@@ -241,3 +245,17 @@ class GameEngine(RawEngine):
             else:
                 # Roll again
                 return RawEngine().throw_dices(GameDTO(dice_map=game_dto.dice_map, board_map=game_dto.board_map))
+            
+    def get_canonical_form(self, game_dto: GameDTO) -> GameDTO:
+        """Returns the canonical form of the game state from the perspective of the next player."""
+        # Swap player stacks
+        new_board_map = game_dto.board_map.model_copy(deep=True)
+        new_board_map.player01_stack, new_board_map.player02_stack = game_dto.board_map.player02_stack, game_dto.board_map.player01_stack
+        new_board_map.current_player = 1
+        return GameDTO(dice_map=game_dto.dice_map, board_map=new_board_map)
+
+    def get_string_hash(self, game_dto: GameDTO) -> str:
+        """Generates a unique string representation of the game state."""
+        tensor_engine = TensorEngine()
+        tensor = tensor_engine.to_tensor(game_dto)
+        return tensor.tobytes()
