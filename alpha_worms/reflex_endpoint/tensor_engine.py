@@ -70,6 +70,11 @@ class TensorEngine:
 
         return tensor
     
+    def get_string_hash(self, game_dto: GameDTO) -> str:
+        """Generates a unique string representation of the game state."""
+        tensor = self.to_tensor(game_dto)
+        return tensor.tobytes()
+
     def to_pillow_heatmap(self, tensor):
 
         scale = 10  # Scale factor for better visibility

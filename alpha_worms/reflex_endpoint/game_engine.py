@@ -2,7 +2,6 @@
 from alpha_worms.reflex_endpoint.models import Dices, Pieces
 from alpha_worms.reflex_endpoint.dto import GameDTO
 import numpy as np
-from alpha_worms.reflex_endpoint.tensor_engine import TensorEngine
 
 
 class RawEngine:
@@ -253,9 +252,3 @@ class GameEngine(RawEngine):
         new_board_map.player01_stack, new_board_map.player02_stack = game_dto.board_map.player02_stack, game_dto.board_map.player01_stack
         new_board_map.current_player = 1
         return GameDTO(dice_map=game_dto.dice_map, board_map=new_board_map)
-
-    def get_string_hash(self, game_dto: GameDTO) -> str:
-        """Generates a unique string representation of the game state."""
-        tensor_engine = TensorEngine()
-        tensor = tensor_engine.to_tensor(game_dto)
-        return tensor.tobytes()
