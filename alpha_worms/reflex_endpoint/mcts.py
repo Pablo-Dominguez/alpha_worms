@@ -10,26 +10,37 @@ class MCTS:
         self.nnet = nnet
         self.args = args 
         
-        self.Qsa = {}  
-        self.Nsa = {}  
-        self.Ns = {}   
-        self.Ps = {}   
-        self.Es = {}   
-        self.Vs = {}   
+        self.Qsa = {}  # Stores Q values for (s, a)
+        self.Nsa = {}  # Stores visit counts for (s, a)
+        self.Ns = {}   # Stores visit counts for state s
+        self.Ps = {}   # Stores initial policy (NN probability vector)
+        self.Es = {}   # Stores game ended status
+        self.Vs = {}   # Stores valid moves mask
 
-    def get_action_probs(self, state: GameDTO, temp=1): # review temp usage
+    def get_action_probs(self, state: GameDTO, temp=1):
+        """
+        Runs MCTS simulations and returns the policy vector pi.
+        """
+        # Run simulations
         for i in range(self.args['numMCTSSims']):
             self.search(state)
 
         s = self.nnet.tensor_engine.get_string_hash(state)
+        
+        # Get counts for all possible actions (size of game action space)
         counts = [self.Nsa.get((s, a), 0) for a in range(self.game.game_size)]
 
+        # --- CASE 1: COMPETITIVE PLAY (Temp -> 0) ---
+        # We pick the move with the most visits (argmax)
         if temp == 0:
             best_as = np.array(np.argwhere(counts == np.max(counts))).flatten()
+            best_a = np.random.choice(best_as)
             probs = [0] * len(counts)
-            probs[np.random.choice(best_as)] = 1
+            probs[best_a] = 1
             return probs
 
+        # --- CASE 2: EXPLORATORY PLAY (Temp > 0) ---
+        # We perform soft selection based on visit counts
         counts = [x ** (1. / temp) for x in counts]
         counts_sum = float(sum(counts))
         probs = [x / counts_sum for x in counts]
@@ -37,39 +48,52 @@ class MCTS:
 
     def search(self, state: GameDTO):
         """
-        Recursive search optimized for multi-move turns.
+        Recursive MCTS search.
+        Invariant: Returns the value of 'state' from the perspective of the
+        player whose turn it is at 'state'.
         """
         s = self.nnet.tensor_engine.get_string_hash(state)
-
-        # 1. Check if terminal state
+        print(f"Searching state...")
+        # 1. CHECK TERMINAL STATE
         if s not in self.Es:
             self.Es[s] = self.game.get_winner(state)
+        
         if self.Es[s] != 0:
-            # If terminal, return the reward from the perspective of the player who just moved
-            return -self.Es[s]
+            # Terminal state found.
+            # Assuming get_winner returns +1 if current player won, -1 if lost.
+            return self.Es[s]
 
-        # 2. Expansion
+        # 2. EXPANSION (Leaf Node)
         if s not in self.Ps:
+            # Get raw prediction
             self.Ps[s], v = self.nnet.predict(state)
+            
+            # --- CRITICAL: MASK INVALID MOVES ---
             valids = self.game.get_allowed_moves(state)
-            self.Ps[s] = self.Ps[s] * valids 
+            self.Ps[s] = self.Ps[s] * valids  # Zero out illegal moves
+            
+            # Renormalize
             sum_Ps = np.sum(self.Ps[s])
             if sum_Ps > 0:
                 self.Ps[s] /= sum_Ps
             else:
-                self.Ps[s] = self.Ps[s] + valids
+                # If NN masked all valid moves (rare edge case), fallback to uniform valid
+                print("All valid moves were masked, falling back to uniform.")
+                self.Ps[s] = valids + 0.00000001
                 self.Ps[s] /= np.sum(self.Ps[s])
 
             self.Vs[s] = valids
             self.Ns[s] = 0
-            # v is the NN's estimate of the state for the current player
-            return -v
+            
+            # Return the NN's value estimate for this state
+            return v
 
-        # 3. Selection (PUCT)
+        # 3. SELECTION (PUCT)
         valids = self.Vs[s]
         cur_best = -float('inf')
         best_act = -1
 
+        # Pick the action with the highest Upper Confidence Bound
         for a in range(self.game.game_size):
             if valids[a]:
                 if (s, a) in self.Qsa:
@@ -83,26 +107,29 @@ class MCTS:
 
         a = best_act
         
-        # --- MULTI-MOVE ADAPTATION ---
-        # Your engine needs to tell us if the turn switched
-        # next_s: the new state
-        # turn_switched: Boolean (True if it's now the other player's turn)
-        next_s = self.game.get_next_state(state, a)
-        turn_switched = next_s.board_map.current_player != state.board_map.current_player
+        # 4. TRANSITION (Execute Move)
+        # Because we used 'valids' in selection, 'a' is guaranteed safe.
+        next_s_raw = self.game.get_next_state(state, a, s)
         
-        # Always canonicalize to the perspective of the player whose turn it is
-        next_s = self.game.get_canonical_form(next_s)
+        # Check if the turn switched players (Crucial for Worms)
+        turn_switched = next_s_raw.board_map.current_player != state.board_map.current_player
+        
+        # Canonicalize: Ensure the NN always sees the board from "Player 1's" perspective
+        next_s = self.game.get_canonical_form(next_s_raw)
 
-        # 4. Recursion
+        # 5. RECURSION
+        # Get value of the next state (from the next player's perspective)
         v = self.search(next_s)
 
-        # 5. Backpropagation
-        # If the turn switched, the value v (from the other player's view) 
-        # must be negated to represent OUR view. 
-        # If the turn DID NOT switch, v is already from our perspective.
+        # 6. BACKPROPAGATION
+        # If the turn switched, the value 'v' is good for the *other* player.
+        # It is therefore bad for *us*.
         if turn_switched:
             v = -v
+        # If turn did NOT switch (multi-move), 'v' is good for *us* (same player).
+        # So we keep v positive.
 
+        # Update Q-values
         if (s, a) in self.Qsa:
             self.Qsa[(s, a)] = (self.Nsa[(s, a)] * self.Qsa[(s, a)] + v) / (self.Nsa[(s, a)] + 1)
             self.Nsa[(s, a)] += 1
@@ -112,5 +139,5 @@ class MCTS:
 
         self.Ns[s] += 1
         
-        # Pass the value back up. If turn switched, negate it for the parent.
-        return -v if turn_switched else v
+        # Return the value from *our* perspective to the parent
+        return v

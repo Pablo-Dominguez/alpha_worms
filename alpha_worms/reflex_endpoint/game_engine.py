@@ -221,13 +221,17 @@ class GameEngine(RawEngine):
 
         return piece_moves + dice_moves + roll_again
     
-    def get_next_state(self, game_dto: GameDTO, action: int):
+    def get_next_state(self, game_dto: GameDTO, action: int, s: str) -> GameDTO:
         """
         Given a game state and an action, returns the next game state (as a new GameDTO).
         """
 
         allowed_moves = self.get_allowed_moves(game_dto)
         if allowed_moves[action] == 0:
+            print(game_dto)
+            print(s)
+            print(allowed_moves)
+            print(action)
             raise ValueError("Action not allowed in the current state.")
         else:
             if action < 16:
