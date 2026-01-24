@@ -21,7 +21,7 @@ class MCTS:
         for i in range(self.args['numMCTSSims']):
             self.search(state)
 
-        s = self.game.get_string_hash(state)
+        s = self.nnet.tensor_engine.get_string_hash(state)
         counts = [self.Nsa.get((s, a), 0) for a in range(self.game.game_size)]
 
         if temp == 0:

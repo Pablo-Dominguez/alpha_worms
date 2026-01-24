@@ -70,6 +70,7 @@ class WormsPredictor:
         self.device = torch.device(device if torch.cuda.is_available() else "cpu")
         self.nnet = WormsNet().to(self.device)
         self.optimizer = optim.Adam(self.nnet.parameters(), lr=0.001, weight_decay=1e-4)
+        self.tensor_engine = TensorEngine()
 
     def predict(self, state):
         """
@@ -77,7 +78,7 @@ class WormsPredictor:
         Output: Policy (numpy), Value (float)
         Used by MCTS.
         """
-        state = TensorEngine().to_tensor(state)
+        state = self.tensor_engine.to_tensor(state)
 
         # Prepare state for the network
         state_tensor = torch.FloatTensor(state.astype(np.float32)).to(self.device)
