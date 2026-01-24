@@ -32,11 +32,11 @@ class Worms:
             canonical_state = self.game.get_canonical_form(state)
             
             # 2. MCTS SEARCH: Get move probabilities for the canonical state
-            pi = mcts.get_action_probs(canonical_state, temp=1) 
+            pi = mcts.get_action_probs(canonical_state, temp=1) # should review temp usage
             
             # 3. STORE EXPERIENCE: Record the state from the perspective 
             # of the player whose turn it was.
-            train_examples.append([canonical_state, pi, curr_player])
+            train_examples.append([canonical_state, pi, curr_player]) # review curr_player usage
 
             # 4. ACTION: Pick a move
             action = np.random.choice(len(pi), p=pi)

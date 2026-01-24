@@ -17,7 +17,7 @@ class MCTS:
         self.Es = {}   
         self.Vs = {}   
 
-    def get_action_probs(self, state: GameDTO, temp=1):
+    def get_action_probs(self, state: GameDTO, temp=1): # review temp usage
         for i in range(self.args['numMCTSSims']):
             self.search(state)
 
@@ -39,7 +39,7 @@ class MCTS:
         """
         Recursive search optimized for multi-move turns.
         """
-        s = self.game.get_string_hash(state)
+        s = self.nnet.tensor_engine.get_string_hash(state)
 
         # 1. Check if terminal state
         if s not in self.Es:

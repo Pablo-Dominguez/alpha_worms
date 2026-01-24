@@ -66,8 +66,8 @@ class WormsNet(nn.Module):
     
 # --- 2. THE WRAPPER CLASS ---
 class WormsPredictor:
-    def __init__(self, device="cuda"):
-        self.device = torch.device(device if torch.cuda.is_available() else "cpu")
+    def __init__(self):
+        self.device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
         self.nnet = WormsNet().to(self.device)
         self.optimizer = optim.Adam(self.nnet.parameters(), lr=0.001, weight_decay=1e-4)
         self.tensor_engine = TensorEngine()

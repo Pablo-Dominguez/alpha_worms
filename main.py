@@ -4,7 +4,7 @@ from alpha_worms.main import Worms
 
 # 1. Initialize Game and Brain
 game = GameEngine() 
-predictor = WormsPredictor(device="cuda")
+predictor = WormsPredictor()
 
 # 2. Define Hyperparameters
 args = {
