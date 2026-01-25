@@ -53,7 +53,7 @@ class MCTS:
         player whose turn it is at 'state'.
         """
         s = self.nnet.tensor_engine.get_string_hash(state)
-        print(f"Searching state...")
+        print('='*30,'\n',f"Searching state...")
         # 1. CHECK TERMINAL STATE
         if s not in self.Es:
             self.Es[s] = self.game.get_winner(state)
@@ -109,7 +109,10 @@ class MCTS:
         
         # 4. TRANSITION (Execute Move)
         # Because we used 'valids' in selection, 'a' is guaranteed safe.
-        next_s_raw = self.game.get_next_state(state, a, s)
+        print(state)
+        print(f"Selected action: {a}, move: {valids[a]}")
+        print(valids)
+        next_s_raw = self.game.get_next_state(state, a)
         
         # Check if the turn switched players (Crucial for Worms)
         turn_switched = next_s_raw.board_map.current_player != state.board_map.current_player
