@@ -60,6 +60,7 @@ class MCTS:
         
         if self.Es[s] != 0:
             # Terminal state found.
+            print(f"Terminal state reached with result {self.Es[s]}")
             # Assuming get_winner returns +1 if current player won, -1 if lost.
             return self.Es[s]
 
@@ -86,6 +87,7 @@ class MCTS:
             self.Ns[s] = 0
             
             # Return the NN's value estimate for this state
+            print(f"Expanded leaf node. NN value: {v}")
             return v
 
         # 3. SELECTION (PUCT)
