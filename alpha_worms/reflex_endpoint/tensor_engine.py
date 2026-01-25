@@ -70,22 +70,6 @@ class TensorEngine:
             tensor[32 + i, :] = new_layer
 
         return tensor
-    
-    def get_string_hash(self, game_dto: GameDTO) -> str:
-        """
-        Generates a unique, collision-resistant hash based on the 
-        actual game logic parameters.
-        """
-        # 1. Convert the Pydantic model to a standard dictionary
-        # we use 'model_dump' for Pydantic v2 (or 'dict()' for v1)
-        state_dict = game_dto.model_dump()
-
-        # 2. Sort keys and convert to a JSON string to ensure stability.
-        # Sorting is vital: {a:1, b:2} must produce the same string as {b:2, a:1}
-        state_json = json.dumps(state_dict, sort_keys=True)
-
-        # 3. Use SHA-256 to create a compact, fixed-length unique identifier
-        return hashlib.sha256(state_json.encode()).hexdigest()
 
     def to_pillow_heatmap(self, tensor):
 

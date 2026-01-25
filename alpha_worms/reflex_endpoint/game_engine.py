@@ -44,7 +44,7 @@ class RawEngine:
             p2_stack = game_dto.board_map.player02_stack
             p1_sum = sum([(piece_number - 21) // 4 for piece_number in p1_stack])
             p2_sum = sum([(piece_number - 21) // 4 for piece_number in p2_stack])
-            return 1 if p1_sum > p2_sum else (-1 if p2_sum > p1_sum else 0)
+            return 1 if p1_sum >= p2_sum else (-1 if p2_sum > p1_sum else 0)
         else:
             return 0  # Game is not over yet
     
