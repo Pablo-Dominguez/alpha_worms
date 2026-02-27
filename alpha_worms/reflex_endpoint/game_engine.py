@@ -127,6 +127,11 @@ class RawEngine:
         
         return self.end_turn(GameDTO(dice_map=old_dice_model, board_map=old_pieces_version))
     
+    def grey_out_dices(self, dice_model: Dices, reset: bool = False):
+        """Greys out all available dices, preventing further selection."""
+        dice_model.grey_out_dices = 1 if not reset else 0
+        return dice_model
+
     def select_dice(self, game_dto: GameDTO, dice_index: int):
         """Selects a dice from the available dices.""" 
         new_dice_model = game_dto.dice_map.model_copy(deep=True)
@@ -150,7 +155,7 @@ class RawEngine:
             if not available_pieces:
                 return self.throw_dices(GameDTO(dice_map=new_dice_model, board_map=game_dto.board_map))
             else:
-                new_dice_model.grey_out_dices = 1
+                new_dice_model = self.grey_out_dices(new_dice_model)
         return GameDTO(dice_map=new_dice_model, board_map=game_dto.board_map)
     
     def throw_dices(self, game_dto: GameDTO):
@@ -160,7 +165,7 @@ class RawEngine:
         new_dices_version = game_dto.dice_map.model_copy(deep=True)
         new_pieces_version = game_dto.board_map.model_copy(deep=True)
 
-        new_dices_version.grey_out_dices = 0  # Reset grey out status
+        new_dices_version = self.grey_out_dices(new_dices_version, reset=True)
 
         new_dices =[(x,int(y)) for x,y in zip(new_dices_version.available_dices,np.random.randint(1, 7, size=len(new_dices_version.available_dices)))]
         total_dices = [(new_dices_version.dices[k] if k not in new_dices_version.available_dices else [y for (x,y) in new_dices if k==x][0]) 

@@ -6,15 +6,15 @@ from alpha_worms.main import Worms
 game = GameEngine() 
 predictor = WormsPredictor()
 
-# 2. Define Hyperparameters
+# 2. Define TINY Hyperparameters for testing
 args = {
     'lr': 0.001,
-    'numMCTSSims': 100,
+    'numMCTSSims': 10,        # Reduced from 100. Just enough to build a tiny tree.
     'cpuct': 1.41,
-    'num_iterations': 50,
-    'num_episodes': 10,
-    'batch_size': 64,
-    'max_buffer_size': 20000,
+    'num_iterations': 2,      # Reduced from 50. Just enough to test the loop and save state.
+    'num_episodes': 2,        # Reduced from 10. Two games per iteration.
+    'batch_size': 8,          # Reduced from 64. 
+    'max_buffer_size': 1000,
     'checkpoint': './checkpoints/'
 }
 
