@@ -4,7 +4,9 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
 import numpy as np
+from alpha_worms.reflex_endpoint.dto import GameDTO
 from alpha_worms.reflex_endpoint.tensor_engine import TensorEngine
+from alpha_worms.reflex_endpoint.game_engine import GameEngine
 
 class ResBlock1D(nn.Module):
     def __init__(self, channels):
@@ -153,7 +155,9 @@ class WormsPredictor:
         """
         Loads weights into the NN from a saved file.
         """
-        filepath = os.path.join(folder, filename)
+        # Get absolute path and include it before the folder
+        abspath = '/home/pablo/Documents/projects/alpha_worms/'
+        filepath = os.path.join(abspath, folder, filename)
         if not os.path.exists(filepath):
             print(f"No checkpoint found at {filepath}. Starting with fresh weights.")
             return
@@ -165,5 +169,39 @@ class WormsPredictor:
         self.nnet.load_state_dict(checkpoint['state_dict'])
         self.optimizer.load_state_dict(checkpoint['optimizer'])
         print(f"Model loaded from {filepath}")
+    
+    def nn_next_move(self, game_dto: GameDTO):
+        # Placeholder for neural network inference logic
+        self.load_checkpoint(folder='./checkpoints/', filename='checkpoint_15.pth.tar')
+        # Here you would typically pass the tensor through your trained model to get move probabilities
+        # For demonstration, we'll just return a dummy move
+        game = GameEngine()
+        # 3. Get a starting board
+        initial_state = game_dto
+
+        # 4. Ask the brain what it thinks! (Get RAW probabilities)
+        raw_policy, value = self.predict(initial_state)
+
+        # ---------------------------------------------------------
+        # 5. MASK AND RE-NORMALIZE (Same logic as MCTS Expansion)
+        # ---------------------------------------------------------
+        valid_moves = game.get_allowed_moves(initial_state)
+
+        # Multiply raw probabilities by the valid moves mask (illegal moves become 0.0)
+        masked_policy = raw_policy * valid_moves
+        sum_probs = np.sum(masked_policy)
+
+        # Re-normalize so the remaining valid probabilities sum to 1.0
+        if sum_probs > 0:
+            policy = masked_policy / sum_probs
+        else:
+            # Fallback in case the untrained network output 0.0 for all valid moves
+            policy = valid_moves / np.sum(valid_moves)
+        # ---------------------------------------------------------
+
+        # Grab the indices of the highest probabilities from the MASKED policy
+        top_moves = np.argsort(policy)[::-1][:3]
+
+        return game.get_next_state(initial_state, top_moves[0])
 
     
