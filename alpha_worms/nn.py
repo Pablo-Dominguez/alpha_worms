@@ -101,16 +101,21 @@ class WormsPredictor:
         
         # Unpack examples
         states, target_pis, target_vs = list(zip(*examples))
-        
-        states = torch.FloatTensor(np.array(states)).to(self.device)
-        target_pis = torch.FloatTensor(np.array(target_pis)).to(self.device)
-        target_vs = torch.FloatTensor(np.array(target_vs)).to(self.device)
 
+        encoded_states = [self.tensor_engine.to_tensor(state) for state in states]
+        try:
+            new_states = torch.FloatTensor(np.array(encoded_states)).to(self.device)
+            target_pis = torch.FloatTensor(np.array(target_pis)).to(self.device)
+            target_vs = torch.FloatTensor(np.array(target_vs)).to(self.device)
+        except Exception as e:
+            print('examples',examples)
+            print(f"Error converting training examples to tensors: {e}")
+            raise e
         # Zero gradients
         self.optimizer.zero_grad()
 
         # Forward pass
-        out_pi, out_v = self.nnet(states)
+        out_pi, out_v = self.nnet(new_states)
 
         # LOSS CALCULATION
         # 1. Policy Loss: Negative Log Likelihood (Cross Entropy)

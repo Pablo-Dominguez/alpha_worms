@@ -233,9 +233,10 @@ class GameEngine(RawEngine):
 
         allowed_moves = self.get_allowed_moves(game_dto)
         if allowed_moves[action] == 0:
-            print(game_dto)
-            print(allowed_moves)
-            print(action)
+            print('Dice map',game_dto.dice_map)
+            print('Piece map',game_dto.board_map)
+            print('Allowed moves',allowed_moves)
+            print('Selected action',action)
             raise ValueError("Action not allowed in the current state.")
         else:
             if action < 16:

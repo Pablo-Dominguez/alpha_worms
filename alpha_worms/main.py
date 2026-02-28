@@ -43,7 +43,14 @@ class Worms:
             
             # 5. TRANSITION: Get next state and check if the turn switched
             # Based on our previous discussion, your engine returns (state, turn_switched)
-            next_s = self.game.get_next_state(state, action)
+            
+            try:
+                next_s = self.game.get_next_state(state, action)
+            except Exception as e:
+                print('Pi',pi)
+                print('Selected action',action)
+                print(f"Error in get_next_state: {e}")
+                raise e
             turn_switched = next_s.board_map.current_player != state.board_map.current_player
             state = next_s
 
@@ -99,5 +106,13 @@ class Worms:
         
         # The predictor.train method we built previously expects a list of examples
         # and handles the tensor conversion itself.
-        loss = self.nnet.train(batch)
-        print(f"Training Loss: {loss:.4f}")
+        try:
+            loss = self.nnet.train(batch)
+            print(f"Training Loss: {loss:.4f}")
+        except Exception as e:
+            # Save batch to text file for debugging
+            with open('training_batch_debug.txt', 'w') as f:
+                for example in batch:
+                    f.write(f"{example}\n")
+            print(f"Error during training: {e}")
+            raise e

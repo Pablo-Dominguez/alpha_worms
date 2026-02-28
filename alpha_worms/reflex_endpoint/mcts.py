@@ -29,19 +29,34 @@ class MCTS:
         state_dict = state.model_dump()
         state_json = json.dumps(state_dict, sort_keys=True)
         return hashlib.sha256(state_json.encode()).hexdigest()
-
+    
     def get_action_probs(self, state: GameDTO, temp=1):
         """
-        Standard AlphaZero action probability generation.
+        Standard AlphaZero action probability generation, with valid move masking.
         """
         for i in range(self.args['numMCTSSims']):
             self.search(state)
 
         s = self.get_string_hash(state)
+        
+        # 1. Get the binary mask of valid moves for this specific state
+        # (Adjust the method name to whatever you used in GameEngine)
+        valids = self.game.get_allowed_moves(state) 
+        
+        # 2. Get the visit counts
         counts = [self.Nsa.get((s, a), 0) for a in range(self.game.game_size)]
 
+        # 3. MASKING: Multiply counts by the valid mask. 
+        # Illegal moves instantly become 0.
+        counts = [c * v for c, v in zip(counts, valids)]
+
         if temp == 0:
-            best_as = np.array(np.argwhere(counts == np.max(counts))).flatten()
+            # Now, np.max will only look at valid moves (or 0 if none were visited)
+            max_count = np.max(counts)
+            
+            # Find all VALID actions that match the max count
+            best_as = [a for a in range(self.game.game_size) if counts[a] == max_count and valids[a]]
+            
             best_a = np.random.choice(best_as)
             probs = [0] * len(counts)
             probs[best_a] = 1
@@ -49,30 +64,48 @@ class MCTS:
 
         # Softmax-like temperature scaling
         counts = [x ** (1. / temp) for x in counts]
+        
+        # Re-mask just to be absolutely certain temperature scaling didn't revive a zero
+        counts = [c * v for c, v in zip(counts, valids)] 
+        
         counts_sum = float(sum(counts))
+        
+        # Fallback: If for some reason sum is 0 (e.g., no valid moves were explored),
+        # return a uniform probability across all valid moves to prevent division by zero.
+        if counts_sum == 0:
+            probs = [v / sum(valids) for v in valids]
+            return probs
+            
         probs = [x / counts_sum for x in counts]
         return probs
 
     def search(self, state: GameDTO):
         """
-        Paranoid MCTS Search.
-        Never trusts the cached 'Vs' mask for selection logic.
+        Paranoid MCTS Search with corrected Terminal Evaluation.
         """
         s = self.get_string_hash(state)
 
-        # 1. TERMINAL CHECK
-        if s in self.Es:
+        # 1. TERMINAL CHECK (Evaluate the canonical state immediately)
+        if s not in self.Es:
+            winner = self.game.get_winner(state)
+            if winner != 0 or self.game.is_terminal(state):
+                # Assuming get_winner on a canonical state returns 
+                # 1 if the canonical active player won, -1 if they lost, 0.1 for draw
+                self.Es[s] = winner
+            else:
+                self.Es[s] = 0 # 0 means not terminal
+
+        if self.Es[s] != 0:
             return self.Es[s]
 
         # 2. EXPANSION (Leaf Node)
         if s not in self.Ps:
             self.Ps[s], v = self.nnet.predict(state)
             
-            # Get FRESH allowed moves
             current_valids = self.game.get_allowed_moves(state)
-            
             self.Ps[s] = self.Ps[s] * current_valids
             sum_Ps = np.sum(self.Ps[s])
+            
             if sum_Ps > 0:
                 self.Ps[s] /= sum_Ps
             else:
@@ -83,11 +116,7 @@ class MCTS:
             return v
 
         # 3. SELECTION (PUCT)
-        # --- PARANOID FIX: IGNORE CACHE ---
-        # We calculate allowed moves freshly for this specific state instance.
-        # This guarantees that even if 's' collides, we obey the actual game rules.
         valids = self.game.get_allowed_moves(state) 
-        
         cur_best = -float('inf')
         best_act = -1
 
@@ -103,29 +132,23 @@ class MCTS:
                     cur_best = u
                     best_act = a
 
-        # 4. SAFETY CHECK (Optional, for peace of mind)
+        # 4. SAFETY CHECK
         if best_act == -1 or valids[best_act] == 0:
              print(f"CRITICAL MISMATCH. Hash: {s}")
-             print(f"Cached Mask: {self.Vs.get(s)}")
-             print(f"Actual Mask: {valids}")
-             # Fallback to random valid
              best_act = np.random.choice(np.where(valids==1)[0])
 
-        # 5. TRANSITION & PRE-CANONICAL TERMINAL CHECK
+        # 5. TRANSITION (Simplified!)
         next_s_raw = self.game.get_next_state(state, best_act)
-        winner = self.game.get_winner(next_s_raw)
+        turn_switched = next_s_raw.board_map.current_player != state.board_map.current_player
         
-        if winner != 0 or self.game.is_terminal(next_s_raw):
-            terminal_v = winner * state.board_map.current_player
-            # Cache the terminal result so we don't re-calculate next time
-            self.Es[self.get_string_hash(next_s_raw)] = terminal_v 
-            v = terminal_v
-        else:
-            turn_switched = next_s_raw.board_map.current_player != state.board_map.current_player
-            next_s = self.game.get_canonical_form(next_s_raw)
-            v = self.search(next_s)
-            if turn_switched:
-                v = -v
+        next_s = self.game.get_canonical_form(next_s_raw)
+        
+        # Recursively search the next canonical state
+        v = self.search(next_s)
+        
+        # Invert the value if the turn switched to the other player
+        if turn_switched:
+            v = -v
 
         # 6. BACKPROPAGATION
         a = best_act
