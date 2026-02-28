@@ -255,9 +255,27 @@ class GameEngine(RawEngine):
                 return RawEngine().throw_dices(GameDTO(dice_map=game_dto.dice_map, board_map=game_dto.board_map))
             
     def get_canonical_form(self, game_dto: GameDTO) -> GameDTO:
-        """Returns the canonical form of the game state from the perspective of the next player."""
-        # Swap player stacks
+        """Returns the canonical form of the game state from the perspective of the CURRENT player."""
+        
+        # 1. If it is already Player 1's turn, just return a deep copy. 
+        # No swapping needed!
+        if game_dto.board_map.current_player == 1:
+            return GameDTO(
+                dice_map=game_dto.dice_map.model_copy(deep=True),
+                board_map=game_dto.board_map.model_copy(deep=True)
+            )
+
+        # 2. If it is Player 2's turn, we must swap the stacks to make them "Player 1"
         new_board_map = game_dto.board_map.model_copy(deep=True)
-        new_board_map.player01_stack, new_board_map.player02_stack = game_dto.board_map.player02_stack, game_dto.board_map.player01_stack
+        
+        # Swap the stacks
+        new_board_map.player01_stack = game_dto.board_map.player02_stack
+        new_board_map.player02_stack = game_dto.board_map.player01_stack
+        
+        # Force the perspective
         new_board_map.current_player = 1
-        return GameDTO(dice_map=game_dto.dice_map, board_map=new_board_map)
+        
+        return GameDTO(
+            dice_map=game_dto.dice_map.model_copy(deep=True), 
+            board_map=new_board_map
+        )
