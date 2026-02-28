@@ -1,0 +1,18 @@
+[tool.poetry]
+name = "alpha-worms"
+version = "0.1.0"
+description = ""
+authors = ["Pablo D. <pabdom03@gmail.com>"]
+readme = "README.md"
+
+[tool.poetry.dependencies]
+python = ">=3.12,<3.15"
+numpy = "^2.3.2"
+pydantic = "^2.12.5"
+matplotlib = "^3.10.0"
+torch = "^2.10.0"
+
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
