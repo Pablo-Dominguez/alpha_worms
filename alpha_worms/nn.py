@@ -8,6 +8,8 @@ from alpha_worms.reflex_endpoint.dto import GameDTO
 from alpha_worms.reflex_endpoint.tensor_engine import TensorEngine
 from alpha_worms.reflex_endpoint.game_engine import GameEngine
 
+torch.set_num_threads(1) # Important for multiprocessing to prevent thread contention
+
 class ResBlock1D(nn.Module):
     def __init__(self, channels):
         super(ResBlock1D, self).__init__()
@@ -73,6 +75,14 @@ class WormsPredictor:
         self.nnet = WormsNet().to(self.device)
         self.optimizer = optim.Adam(self.nnet.parameters(), lr=0.001, weight_decay=1e-4)
         self.tensor_engine = TensorEngine()
+        self.share_memory() # Enable sharing for multiprocessing
+
+    def share_memory(self):
+        """
+        Allows the underlying PyTorch model weights to be shared across 
+        multiple CPU cores for parallel self-play.
+        """
+        self.nnet.share_memory()
 
     def predict(self, state):
         """

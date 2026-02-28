@@ -1,6 +1,8 @@
 from alpha_worms.reflex_endpoint.game_engine import GameEngine
 from alpha_worms.nn import WormsPredictor
 from alpha_worms.mcts import MCTS
+import concurrent.futures
+import multiprocessing as mp
 import numpy as np
 from collections import deque
 import random
@@ -70,23 +72,83 @@ class Worms:
                     for hist_state, hist_pi, hist_player in train_examples
                 ]
 
+    def parallel_self_play(self, num_games_to_play):
+        """
+        Orchestrates multiple games of self-play simultaneously across CPU cores.
+        """
+        all_new_examples = []
+        
+        # Determine how many workers we can safely use
+        # Leave 1 core free for OS background tasks
+        num_workers = max(1, mp.cpu_count() - 1) 
+        
+        print(f"Spawning {num_workers} parallel workers to play {num_games_to_play} games...")
+
+        # ProcessPoolExecutor creates isolated Python processes 
+        with concurrent.futures.ProcessPoolExecutor(max_workers=num_workers) as executor:
+            
+            # Submit all games to the queue
+            # We use an underscore because we just need to run it N times
+            futures = [executor.submit(self.execute_episode) for _ in range(num_games_to_play)]
+            
+            # As each game completes, grab its data
+            for i, future in enumerate(concurrent.futures.as_completed(futures)):
+                try:
+                    game_history = future.result()
+                    all_new_examples.extend(game_history)
+                    print(f"Game {i+1}/{num_games_to_play} completed. Generated {len(game_history)} moves.")
+                except Exception as e:
+                    print(f"A worker process crashed: {e}")
+
+        # Add the collected batch to your main training deque
+        self.train_data.extend(all_new_examples)
+        
+        print(f"Parallel self-play complete! Added {len(all_new_examples)} total moves to buffer.")
+        return all_new_examples
+
     def learn(self):
         """
-        The main training loop.
+        The main training loop, supercharged for parallel self-play.
         """
-        for i in range(1, self.args['num_iterations'] + 1):
-            print(f"--- Iteration {i}/{self.args['num_iterations']} ---")
-            
-            # PHASE 1: SELF-PLAY
-            # The AI plays against itself to generate new training data
-            iteration_train_data = []
-            for e in range(self.args['num_episodes']):
-                iteration_train_data += self.execute_episode()
-                if (e + 1) % 10 == 0:
-                    print(f"Episodes completed: {e + 1}")
+        # CRITICAL: Tell PyTorch to share the model's memory across processes
+        self.nnet.share_memory()
+        
+        # CRITICAL FOR GPU LATER: Force PyTorch to use 'spawn' to prevent freezing
+        try:
+            mp.set_start_method('spawn', force=True)
+        except RuntimeError:
+            pass # Method is already set, we can safely ignore
 
-            # Add the new data to our master buffer
+        for i in range(1, self.args['num_iterations'] + 1):
+            print(f"\n--- Iteration {i}/{self.args['num_iterations']} ---")
+            
+            # PHASE 1: PARALLEL SELF-PLAY
+            iteration_train_data = []
+            num_episodes = self.args['num_episodes']
+            
+            # Reserve 1 core for the OS so your computer doesn't freeze
+            num_workers = min(5, max(1, mp.cpu_count() - 1))
+            print(f"Spawning {num_workers} workers to play {num_episodes} games...")
+            
+            with concurrent.futures.ProcessPoolExecutor(max_workers=num_workers) as executor:
+                # 1. Dispatch all games to the workers
+                futures = [executor.submit(self.execute_episode) for _ in range(num_episodes)]
+                
+                # 2. Collect the data as each worker finishes a game
+                for count, future in enumerate(concurrent.futures.as_completed(futures), 1):
+                    try:
+                        game_history = future.result()
+                        iteration_train_data.extend(game_history)
+                        
+                        # Print progress every few games so you know it's not frozen
+                        if count % max(1, (num_episodes // 5)) == 0:
+                            print(f"  -> Completed {count}/{num_episodes} games...")
+                    except Exception as e:
+                        print(f"A worker process crashed: {e}")
+
+            # Add the parallel-generated data to our master buffer
             self.train_data.extend(iteration_train_data)
+            print(f"Added {len(iteration_train_data)} moves to buffer. Total buffer: {len(self.train_data)}")
 
             # PHASE 2: TRAINING
             # Update the Neural Network weights using the buffer
