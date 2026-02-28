@@ -1,6 +1,6 @@
 from alpha_worms.reflex_endpoint.game_engine import GameEngine
 from alpha_worms.nn import WormsPredictor
-from alpha_worms.reflex_endpoint.mcts import MCTS
+from alpha_worms.mcts import MCTS
 import numpy as np
 from collections import deque
 import random
