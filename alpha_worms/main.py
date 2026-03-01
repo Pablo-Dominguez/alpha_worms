@@ -7,13 +7,16 @@ from collections import deque
 import torch
 import torch.multiprocessing as mp
 import random
+import pickle
+import os
+from datetime import datetime
 
 class Worms:
     def __init__(self, game: GameEngine, nnet: WormsPredictor, args):
         self.game = game
         self.nnet = nnet
         self.args = args  
-        self.train_data = deque(maxlen=args['max_buffer_size'])
+        self.train_data = deque(maxlen=args['max_buffer_size'],50000)
 
     @staticmethod
     def execute_episode(game, mcts=None):
@@ -73,6 +76,69 @@ class Worms:
                     for hist_state, hist_pi, hist_player in train_examples
                 ]
 
+    def load_model(self):
+        """
+        Scans the checkpoint folder for the latest saved model and loads it.
+        Returns the iteration number it found so the loop can resume properly.
+        """
+        folder = self.args['checkpoint']
+        if not os.path.exists(folder):
+            print("No checkpoint folder found. Starting fresh.")
+            return 0
+
+        # Find all .pth.tar files
+        files = [f for f in os.listdir(folder) if f.startswith("checkpoint_") and f.endswith(".pth.tar")]
+        if not files:
+            print("No checkpoints found. Starting fresh.")
+            return 0
+
+        # Extract iteration numbers and find the highest one
+        latest_iter = 0
+        latest_file = ""
+        for f in files:
+            try:
+                iter_num = int(f.split("_")[1].split(".")[0])
+                if iter_num > latest_iter:
+                    latest_iter = iter_num
+                    latest_file = f
+            except ValueError:
+                continue
+
+        if latest_file:
+            print(f"Loading checkpoint: {latest_file}")
+            self.nnet.load_checkpoint(folder=folder, filename=latest_file)
+            return latest_iter
+        
+        return 0
+
+    def load_history(self):
+        """
+        Loads all previous self-play games from the history folder into the deque.
+        """
+        history_folder = os.path.join(self.args['checkpoint'], "history")
+        if not os.path.exists(history_folder):
+            print("No history folder found. Starting with an empty buffer.")
+            return
+
+        print("Loading history from disk... This might take a moment.")
+        # Sort files so we load them chronologically
+        files = sorted([f for f in os.listdir(history_folder) if f.endswith(".pkl")])
+        
+        loaded_moves = 0
+        for file in files:
+            filepath = os.path.join(history_folder, file)
+            try:
+                with open(filepath, "rb") as f:
+                    data = pickle.load(f)
+                    # Because train_data is a deque with maxlen, it will safely 
+                    # push out old moves if the loaded files exceed max_buffer_size
+                    self.train_data.extend(data)
+                    loaded_moves += len(data)
+            except Exception as e:
+                print(f"Failed to load {file}: {e}")
+                
+        print(f"Successfully loaded {loaded_moves} total moves. Current buffer size: {len(self.train_data)}")
+
     def learn(self):
         """
         True AlphaZero IPC Multiprocessing Pipeline.
@@ -81,35 +147,35 @@ class Worms:
             from alpha_worms.nn import WormsPredictor
             self.nnet = WormsPredictor()
 
-        for i in range(1, self.args['num_iterations'] + 1):
-            print(f"\n--- Iteration {i}/{self.args['num_iterations']} ---")
+        # --- NEW: LOAD PREVIOUS STATE ---
+        start_iter = self.load_model()
+        self.load_history()
+
+        # Offset the loop so if we load checkpoint_5, we start training on iteration 6
+        for i in range(start_iter + 1, start_iter + self.args['num_iterations'] + 1):
+            print(f"\n--- Iteration {i} ---")
             
             num_episodes = self.args['num_episodes']
-            # Cap workers to your CPU cores to prevent thrashing
             num_workers = min(num_episodes, max(1, mp.cpu_count() - 2)) 
             
-            # 1. BUILD THE IPC PIPELINE
             request_queue = mp.Queue()
-            # Create a dedicated pipe for each worker so the GPU can send answers back
             parent_pipes, child_pipes = zip(*[mp.Pipe() for _ in range(num_workers)])
             
-            # 2. SPAWN THE WAITERS (CPU WORKERS)
             processes = []
             for worker_id in range(num_workers):
-                # Calculate how many games this specific worker should play
                 games_per_worker = num_episodes // num_workers
                 if worker_id < (num_episodes % num_workers):
                     games_per_worker += 1
                 
                 p = mp.Process(
-                    target=Worms.worker_play_games, # Call via Class, not self!
+                    target=Worms.worker_play_games,
                     args=(worker_id, games_per_worker, request_queue, child_pipes[worker_id], 
-                        self.args, self.game) # Only pass picklable data!
+                        self.args, self.game)
                 )
                 p.start()
                 processes.append(p)
 
-            # 3. THE CHEF: MAIN GPU BATCHING LOOP
+            # --- FIXED INDENTATION: This block MUST be inside the for loop ---
             iteration_train_data = []
             active_workers = num_workers
             requests_batch = []
@@ -117,76 +183,73 @@ class Worms:
             print(f"Started {num_workers} CPU workers. GPU Batching server listening...")
             
             while active_workers > 0:
-                # Try to scoop a request from the queue
                 try:
-                    # Timeout is crucial! It allows the GPU to process half-full batches 
-                    # if workers are taking too long, preventing deadlocks.
                     req = request_queue.get(timeout=0.05) 
-                    
-                    # If a worker sends 'DONE', they finished their games
                     if req == "DONE":
                         active_workers -= 1
                         continue
                     elif req[0] == "DATA":
-                        # Worker sends completed game data back to master buffer
                         iteration_train_data.extend(req[1])
                         continue
-                        
-                    requests_batch.append(req) # req is (worker_id, state)
-                except Exception: # Queue is empty
+                    requests_batch.append(req)
+                except Exception:
                     pass
                 
-                # If we hit our batch limit OR the queue is empty but we have requests waiting
                 if len(requests_batch) >= self.args['batch_size'] or (len(requests_batch) > 0 and request_queue.empty()):
-                    
-                    # Unpack the batch
                     worker_ids = [r[0] for r in requests_batch]
                     states = [r[1] for r in requests_batch]
-                    
-                    # --- DIRECT GPU INFERENCE ---
-                    # (You will need to ensure your predictor can accept a list of states!)
                     policies, values = self.nnet.predict_batch(states)
-                    
-                    # Send the answers back down the specific pipes
                     for idx, w_id in enumerate(worker_ids):
                         parent_pipes[w_id].send((policies[idx], values[idx]))
-                    
-                    requests_batch = [] # Reset for next batch
+                    requests_batch = []
 
-            # Wait for all processes to clean up gracefully
             for p in processes:
                 p.join()
                 
-            self.train_data.extend(iteration_train_data)
-            print(f"Added {len(iteration_train_data)} moves. Total buffer: {len(self.train_data)}")
+            # --- PERSISTENCE LAYER ---
+            if len(iteration_train_data) > 0:
+                self.save_iteration_data(i, iteration_train_data)
+                self.train_data.extend(iteration_train_data)
+                # Removed the slice logic here; deque handles sizing automatically!
 
-            # -----------------------------------------------------------
-            # PHASE 2 & 3: TRAIN AND SAVE (Unchanged)
-            # -----------------------------------------------------------
+            # --- TRAINING LAYER ---
             if len(self.train_data) > 0:
-                self.train_network()
+                print(f"Training on {len(self.train_data)} moves...")
+                self.train_network(epochs=self.args.get('train_epochs', 10))
+                
             self.nnet.save_checkpoint(folder=self.args['checkpoint'], filename=f'checkpoint_{i}.pth.tar')
     
-    def train_network(self):
+    def save_iteration_data(self, iteration, data):
+        folder = os.path.join(self.args['checkpoint'], "history")
+        if not os.path.exists(folder):
+            os.makedirs(folder)
+        
+        filename = os.path.join(folder, f"iteration_{iteration}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pkl")
+        with open(filename, "wb") as f:
+            pickle.dump(data, f)
+        print(f"Successfully saved {len(data)} moves to {filename}")
+
+    def train_network(self, epochs=1):
         """
         Samples a batch from the buffer and trains the NN.
         """
-        # We sample a random batch to break the correlation between consecutive moves
-        batch_size = min(len(self.train_data), self.args['batch_size'])
-        batch = random.sample(self.train_data, batch_size)
-        
-        # The predictor.train method we built previously expects a list of examples
-        # and handles the tensor conversion itself.
-        try:
-            loss = self.nnet.train(batch)
-            print(f"Training Loss: {loss:.4f}")
-        except Exception as e:
-            # Save batch to text file for debugging
-            with open('training_batch_debug.txt', 'w') as f:
-                for example in batch:
-                    f.write(f"{example}\n")
-            print(f"Error during training: {e}")
-            raise e
+        for epoch in range(epochs):
+            # We sample a random batch to break the correlation between consecutive moves
+            batch_size = min(len(self.train_data), self.args['batch_size'])
+            batch = random.sample(self.train_data, batch_size)
+            
+            # The predictor.train method we built previously expects a list of examples
+            # and handles the tensor conversion itself.
+            try:
+                loss = self.nnet.train(batch)
+                print(f"Training Loss: {loss:.4f}")
+            except Exception as e:
+                # Save batch to text file for debugging
+                with open('training_batch_debug.txt', 'w') as f:
+                    for example in batch:
+                        f.write(f"{example}\n")
+                print(f"Error during training: {e}")
+                raise e
     
     @staticmethod
     def worker_play_games(worker_id, num_games, request_queue, worker_pipe, args, game):

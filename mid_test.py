@@ -19,11 +19,12 @@ if __name__ == '__main__':
         'lr': 0.001,              
         'numMCTSSims': 100,       # REDUCED: 100 sims strikes the perfect balance between smart moves and speed.
         'cpuct': 1.25,            
-        'num_iterations': 25,     # REDUCED: 25 iterations will give a clear learning curve.
-        'num_episodes': 40,       # REDUCED: 40 games / 5 workers = 8 games per worker per iteration. Very manageable.
+        'num_iterations': 1,     # REDUCED: 25 iterations will give a clear learning curve.
+        'num_episodes': 2,       # REDUCED: 40 games / 5 workers = 8 games per worker per iteration. Very manageable.
         'batch_size': 64,         
         'max_buffer_size': 10000, # Cap the buffer slightly to save RAM over the 24 hours.
-        'checkpoint': './checkpoints/'
+        'checkpoint': './checkpoints/',
+        'train_epochs': 2
     }
 
     # 3. Initialize the Trainer

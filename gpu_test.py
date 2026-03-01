@@ -27,6 +27,7 @@ if __name__ == '__main__':
         'num_iterations': 1,
         'num_episodes': 32,       # Keep at 32 (Your CPU handles this well)
         'batch_size': 32,         # MATCH THIS TO EPISODES: No more waiting for empty slots!
+        'train_epochs': 20,
         'max_buffer_size': 10000,
         'checkpoint': './checkpointsv2/'
     }
