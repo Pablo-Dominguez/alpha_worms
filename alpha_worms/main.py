@@ -1,6 +1,7 @@
 from alpha_worms.reflex_endpoint.game_engine import GameEngine
 from alpha_worms.nn import WormsPredictor
 from alpha_worms.mcts import MCTS
+import concurrent.futures
 import numpy as np
 from collections import deque
 import random
@@ -72,28 +73,42 @@ class Worms:
 
     def learn(self):
         """
-        The main training loop.
+        The baseline sequential training loop. 
+        Highly stable, no GIL bottlenecks, pure direct GPU math.
         """
         for i in range(1, self.args['num_iterations'] + 1):
-            print(f"--- Iteration {i}/{self.args['num_iterations']} ---")
+            print(f"\n--- Iteration {i}/{self.args['num_iterations']} ---")
             
-            # PHASE 1: SELF-PLAY
-            # The AI plays against itself to generate new training data
+            # -----------------------------------------------------------
+            # PHASE 1: SEQUENTIAL SELF-PLAY
+            # -----------------------------------------------------------
             iteration_train_data = []
-            for e in range(self.args['num_episodes']):
-                iteration_train_data += self.execute_episode()
-                if (e + 1) % 10 == 0:
-                    print(f"Episodes completed: {e + 1}")
+            num_episodes = self.args['num_episodes']
+            
+            print(f"Playing {num_episodes} games sequentially...")
+            
+            # A standard loop. No threads, no processes, no crashing.
+            for game_num in range(1, num_episodes + 1):
+                try:
+                    game_history = self.execute_episode()
+                    iteration_train_data.extend(game_history)
+                    print(f"  -> Completed {game_num}/{num_episodes} games...")
+                except Exception as e:
+                    print(f"Game crashed: {e}")
+                    raise e
 
-            # Add the new data to our master buffer
             self.train_data.extend(iteration_train_data)
+            print(f"Added {len(iteration_train_data)} moves to buffer. Total buffer: {len(self.train_data)}")
 
+            # -----------------------------------------------------------
             # PHASE 2: TRAINING
-            # Update the Neural Network weights using the buffer
-            self.train_network()
+            # -----------------------------------------------------------
+            if len(self.train_data) > 0:
+                self.train_network()
 
+            # -----------------------------------------------------------
             # PHASE 3: SAVE
-            # Keep a backup of the 'brain' after every iteration
+            # -----------------------------------------------------------
             self.nnet.save_checkpoint(folder=self.args['checkpoint'], filename=f'checkpoint_{i}.pth.tar')
 
     def train_network(self):

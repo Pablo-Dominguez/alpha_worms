@@ -4,9 +4,15 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
 import numpy as np
+import threading
+import queue
+import time
 from alpha_worms.reflex_endpoint.dto import GameDTO
 from alpha_worms.reflex_endpoint.tensor_engine import TensorEngine
 from alpha_worms.reflex_endpoint.game_engine import GameEngine
+import multiprocessing as mp
+
+torch.set_num_threads(1) # Important for multiprocessing to prevent thread contention
 
 class ResBlock1D(nn.Module):
     def __init__(self, channels):
@@ -73,6 +79,25 @@ class WormsPredictor:
         self.nnet = WormsNet().to(self.device)
         self.optimizer = optim.Adam(self.nnet.parameters(), lr=0.001, weight_decay=1e-4)
         self.tensor_engine = TensorEngine()
+        # self.share_memory() # Enable sharing for multiprocessing
+        self.load_checkpoint(folder='./checkpoints/', filename='checkpoint_25.pth.tar')
+        print(f"Using device: {self.device}")
+
+        # 1. THE QUEUE SYSTEM
+        # self.prediction_queue = mp.Manager().Queue()
+        # self.batch_size = 32 # Maximum items to scoop up at once
+        
+        # 2. START THE GPU WORKER THREAD
+        # self.running = True
+        # self.worker_thread = threading.Thread(target=self._gpu_worker_loop, daemon=True)
+        # self.worker_thread.start()
+
+    def share_memory(self):
+        """
+        Allows the underlying PyTorch model weights to be shared across 
+        multiple CPU cores for parallel self-play.
+        """
+        self.nnet.share_memory()
 
     def predict(self, state):
         """
@@ -172,7 +197,7 @@ class WormsPredictor:
     
     def nn_next_move(self, game_dto: GameDTO):
         # Placeholder for neural network inference logic
-        self.load_checkpoint(folder='./checkpoints/', filename='checkpoint_15.pth.tar')
+        # self.load_checkpoint(folder='./checkpoints/', filename='checkpoint_25.pth.tar')
         # Here you would typically pass the tensor through your trained model to get move probabilities
         # For demonstration, we'll just return a dummy move
         game = GameEngine()
@@ -204,4 +229,68 @@ class WormsPredictor:
 
         return game.get_next_state(initial_state, top_moves[0])
 
-    
+    # ## GPU methods:
+    # def request_prediction(self, state):
+    #     """
+    #     Game threads call this INSTEAD of predict().
+    #     It drops the state in the bucket and waits.
+    #     """
+    #     # Create a personal event lock and a dictionary to hold the answer
+    #     event = threading.Event()
+    #     result = {}
+        
+    #     # Put our request in the queue
+    #     self.prediction_queue.put((state, event, result))
+        
+    #     # Put this specific game thread to sleep until the GPU unlocks it
+    #     event.wait() 
+        
+    #     # Wake up and return the results!
+    #     return result['pi'], result['v']
+
+    # def _gpu_worker_loop(self):
+    #     """
+    #     This runs infinitely in the background, scooping up requests.
+    #     """
+    #     while self.running:
+    #         requests = []
+            
+    #         # Scoop items out of the queue until it's empty OR we hit our batch limit
+    #         while not self.prediction_queue.empty() and len(requests) < self.batch_size:
+    #             try:
+    #                 requests.append(self.prediction_queue.get_nowait())
+    #             except queue.Empty:
+    #                 break
+            
+    #         if len(requests) == 0:
+    #             # If the bucket is empty, sleep for 1 millisecond so we don't fry the CPU
+    #             time.sleep(0.001)
+    #             continue
+                
+    #         # --- WE HAVE A BATCH! DO THE MATH! ---
+            
+    #         # 1. Unpack the requests
+    #         states = [req[0] for req in requests]
+    #         events = [req[1] for req in requests]
+    #         results = [req[2] for req in requests]
+            
+    #         # 2. Convert ALL states into one massive tensor block
+    #         encoded_states = [self.tensor_engine.to_tensor(s) for s in states]
+            
+    #         # ADD .astype(np.float32) HERE
+    #         numpy_batch = np.array(encoded_states).astype(np.float32) 
+    #         batch_tensor = torch.FloatTensor(numpy_batch).to(self.device)
+            
+    #         # 3. ONE Neural Network Pass
+    #         self.nnet.eval()
+    #         with torch.no_grad():
+    #             pi_batch, v_batch = self.nnet(batch_tensor)
+                
+    #         pi_batch = torch.exp(pi_batch).cpu().numpy()
+    #         v_batch = v_batch.cpu().numpy()
+            
+    #         # 4. Hand the answers back and wake up the game threads!
+    #         for i in range(len(requests)):
+    #             results[i]['pi'] = pi_batch[i]
+    #             results[i]['v'] = v_batch[i][0]
+    #             events[i].set() # WAKE UP!
