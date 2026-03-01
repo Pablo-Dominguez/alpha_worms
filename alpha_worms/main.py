@@ -73,39 +73,29 @@ class Worms:
 
     def learn(self):
         """
-        The main training loop, supercharged for multi-threaded GPU batching.
+        The baseline sequential training loop. 
+        Highly stable, no GIL bottlenecks, pure direct GPU math.
         """
-        # (Deleted all the mp.spawn and share_memory stuff!)
-
         for i in range(1, self.args['num_iterations'] + 1):
             print(f"\n--- Iteration {i}/{self.args['num_iterations']} ---")
             
             # -----------------------------------------------------------
-            # PHASE 1: MULTI-THREADED SELF-PLAY
+            # PHASE 1: SEQUENTIAL SELF-PLAY
             # -----------------------------------------------------------
             iteration_train_data = []
             num_episodes = self.args['num_episodes']
             
-            # Threads are lightweight! We can easily spawn one thread per game 
-            # (as long as it doesn't exceed our GPU queue batch size of 32).
-            num_workers = min(num_episodes, 32) 
-            print(f"Spawning {num_workers} threads to play {num_episodes} games...")
+            print(f"Playing {num_episodes} games sequentially...")
             
-            # Changed to ThreadPoolExecutor and removed mp_context
-            with concurrent.futures.ThreadPoolExecutor(max_workers=num_workers) as executor:
-                # 1. Dispatch all games to the worker threads
-                futures = [executor.submit(self.execute_episode) for _ in range(num_episodes)]
-                
-                # 2. Collect the data as each thread finishes a game
-                for count, future in enumerate(concurrent.futures.as_completed(futures), 1):
-                    try:
-                        game_history = future.result()
-                        iteration_train_data.extend(game_history)
-                        
-                        if count % max(1, (num_episodes // 5)) == 0:
-                            print(f"  -> Completed {count}/{num_episodes} games...")
-                    except Exception as e:
-                        print(f"A worker thread crashed: {e}")
+            # A standard loop. No threads, no processes, no crashing.
+            for game_num in range(1, num_episodes + 1):
+                try:
+                    game_history = self.execute_episode()
+                    iteration_train_data.extend(game_history)
+                    print(f"  -> Completed {game_num}/{num_episodes} games...")
+                except Exception as e:
+                    print(f"Game crashed: {e}")
+                    raise e
 
             self.train_data.extend(iteration_train_data)
             print(f"Added {len(iteration_train_data)} moves to buffer. Total buffer: {len(self.train_data)}")
@@ -113,12 +103,8 @@ class Worms:
             # -----------------------------------------------------------
             # PHASE 2: TRAINING
             # -----------------------------------------------------------
-            # Safety check in case threads failed
-            if len(self.train_data) == 0:
-                print("⚠️ Warning: Buffer is empty! Skipping training this iteration.")
-                continue
-
-            self.train_network()
+            if len(self.train_data) > 0:
+                self.train_network()
 
             # -----------------------------------------------------------
             # PHASE 3: SAVE
