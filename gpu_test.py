@@ -17,22 +17,22 @@ if __name__ == '__main__':
 
     # 1. Initialize Game and Brain
     game = GameEngine() 
-    predictor = WormsPredictor()
+    # predictor = WormsPredictor()
 
     # 2. Define STRESS TEST Hyperparameters for RTX 3050 Ti
     args = {
         'lr': 0.001,
         'numMCTSSims': 50,        # Up from 10. Forces the MCTS to search deeper and query the GPU more often.
         'cpuct': 1.41,
-        'num_iterations': 3,      # 3 full loops of Play -> Train -> Save
-        'num_episodes': 4,       # THE MAGIC NUMBER: Spawns 32 threads. Fills your GPU queue for maximum batching efficiency!
+        'num_iterations': 1,      # 3 full loops of Play -> Train -> Save
+        'num_episodes': 2,       # THE MAGIC NUMBER: Spawns 32 threads. Fills your GPU queue for maximum batching efficiency!
         'batch_size': 64,         # Up from 8. Safe for 4GB VRAM during the neural network backpropagation phase.
         'max_buffer_size': 10000,
         'checkpoint': './checkpointsv2/'
     }
 
     # 3. Initialize the Trainer
-    worms_trainer = Worms(game, predictor, args)
+    worms_trainer = Worms(game, None, args)
 
     print(f"Starting GPU Stress Test with {args['num_episodes']} concurrent games...")
     start_time = time.time()

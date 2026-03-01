@@ -14,26 +14,24 @@ class Worms:
         self.args = args  
         self.train_data = deque(maxlen=args['max_buffer_size'])
 
-    def execute_episode(self, mcts=None):
+    @staticmethod
+    def execute_episode(game, mcts=None):
         """
         Executes one full game of self-play using MCTS.
         """
         train_examples = []
-        state = self.game.get_initial_state()
+        state = game.get_initial_state()
         
         # curr_player tracks the 'real' identity (1 or -1)
         # so we can assign the correct reward at the end.
         curr_player = 1 
 
         # We refresh MCTS for every new game to clear the tree
-        # USE THE PASSED MCTS (The Proxy), OR CREATE A DEFAULT ONE
-        if mcts is None:
-            mcts = MCTS(self.game, self.nnet, self.args)
 
         while True:
             # 1. CANONICALIZE: Always present the board to the MCTS/NN 
             # as if it is Player 1's turn.
-            canonical_state = self.game.get_canonical_form(state)
+            canonical_state = game.get_canonical_form(state)
             
             # 2. MCTS SEARCH: Get move probabilities for the canonical state
             pi = mcts.get_action_probs(canonical_state, temp=1) # should review temp usage
@@ -49,7 +47,7 @@ class Worms:
             # Based on our previous discussion, your engine returns (state, turn_switched)
             
             try:
-                next_s = self.game.get_next_state(state, action)
+                next_s = game.get_next_state(state, action)
             except Exception as e:
                 print('Pi',pi)
                 print('Selected action',action)
@@ -62,7 +60,7 @@ class Worms:
                 curr_player *= -1
 
             # 6. TERMINAL CHECK
-            reward = self.game.get_winner(state)
+            reward = game.get_winner(state)
 
             if reward != 0:
                 # Game over! 
@@ -78,6 +76,10 @@ class Worms:
         """
         True AlphaZero IPC Multiprocessing Pipeline.
         """
+        if self.nnet is None:
+            from alpha_worms.nn import WormsPredictor
+            self.nnet = WormsPredictor()
+
         for i in range(1, self.args['num_iterations'] + 1):
             print(f"\n--- Iteration {i}/{self.args['num_iterations']} ---")
             
@@ -99,8 +101,9 @@ class Worms:
                     games_per_worker += 1
                 
                 p = mp.Process(
-                    target=self.worker_play_games, 
-                    args=(worker_id, games_per_worker, request_queue, child_pipes[worker_id])
+                    target=Worms.worker_play_games, # Call via Class, not self!
+                    args=(worker_id, games_per_worker, request_queue, child_pipes[worker_id], 
+                        self.args, self.game) # Only pass picklable data!
                 )
                 p.start()
                 processes.append(p)
@@ -183,8 +186,9 @@ class Worms:
                     f.write(f"{example}\n")
             print(f"Error during training: {e}")
             raise e
-        
-    def worker_play_games(self, worker_id, num_games, request_queue, worker_pipe):
+    
+    @staticmethod
+    def worker_play_games(worker_id, num_games, request_queue, worker_pipe, args, game):
         """
         The isolated process that runs the games and MCTS on a single CPU core.
         """
@@ -195,12 +199,12 @@ class Worms:
         
         for game_num in range(1, num_games + 1):
             # 2. Initialize a fresh MCTS for this game using the PROXY
-            mcts = MCTS(self.game, proxy_nnet, self.args)
+            mcts = MCTS(game, proxy_nnet, args)
             
             # NOTE: You will need to ensure your self.execute_episode() 
             # uses this specific 'mcts' instance! 
             # Example: game_history = self.execute_episode(mcts)
-            game_history = self.execute_episode(mcts=mcts) 
+            game_history = Worms.execute_episode(game, mcts=mcts) 
             
             worker_train_data.extend(game_history)
             print(f"Worker {worker_id} completed game {game_num}/{num_games}")
