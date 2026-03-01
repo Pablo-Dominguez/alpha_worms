@@ -4,6 +4,7 @@ from alpha_worms.mcts import MCTS
 # import concurrent.futures
 import numpy as np
 from collections import deque
+import torch
 import torch.multiprocessing as mp
 import random
 
@@ -225,11 +226,20 @@ class IPCPredictorProxy:
         self.request_queue = request_queue
         self.worker_pipe = worker_pipe
 
+        from alpha_worms.reflex_endpoint.tensor_engine import TensorEngine
+        self.tensor_engine = TensorEngine()
+
     def predict(self, state):
-        # 1. Slide the order (board state) into the kitchen queue
-        self.request_queue.put((self.worker_id, state))
+        # 1. Convert DTO to a simple NumPy array/Tensor INSIDE the worker
+        # This is much "lighter" to pickle than a full DTO object
+        raw_tensor = self.tensor_engine.to_tensor(state)
+        # If it's already a Torch Tensor, move it to CPU and convert to Numpy 
+        # to ensure the most efficient pickling across the IPC pipe.
+        if isinstance(raw_tensor, torch.Tensor):
+            raw_tensor = raw_tensor.detach().cpu().numpy()
+
+        # 2. Send the raw data, not the DTO
+        self.request_queue.put((self.worker_id, raw_tensor))
         
-        # 2. Wait at the table (pipe) for the Chef to send the food back
         policy, value = self.worker_pipe.recv() 
-        
         return policy, value
