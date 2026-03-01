@@ -100,7 +100,7 @@ class MCTS:
 
         # 2. EXPANSION (Leaf Node)
         if s not in self.Ps:
-            self.Ps[s], v = self.nnet.predict(state)
+            self.Ps[s], v = self.nnet.request_prediction(state)
             
             current_valids = self.game.get_allowed_moves(state)
             self.Ps[s] = self.Ps[s] * current_valids

@@ -74,56 +74,56 @@ class Worms:
 
     def learn(self):
         """
-        The main training loop, supercharged for parallel self-play.
+        The main training loop, supercharged for multi-threaded GPU batching.
         """
-        # CRITICAL: Tell PyTorch to share the model's memory across processes
-        self.nnet.share_memory()
-        
-        num_workers = 3
-        # CRITICAL FOR GPU LATER: Force PyTorch to use 'spawn' to prevent freezing
-        try:
-            mp.set_start_method('spawn', force=True)
-        except RuntimeError:
-            pass # Method is already set, we can safely ignore
+        # (Deleted all the mp.spawn and share_memory stuff!)
 
         for i in range(1, self.args['num_iterations'] + 1):
             print(f"\n--- Iteration {i}/{self.args['num_iterations']} ---")
             
-            # PHASE 1: PARALLEL SELF-PLAY
+            # -----------------------------------------------------------
+            # PHASE 1: MULTI-THREADED SELF-PLAY
+            # -----------------------------------------------------------
             iteration_train_data = []
             num_episodes = self.args['num_episodes']
             
-            # Reserve 1 core for the OS so your computer doesn't freeze
-            num_workers = min(num_workers, max(1, mp.cpu_count() - 1))
-            print(f"Spawning {num_workers} workers to play {num_episodes} games...")
-            ctx = mp.get_context('spawn')
+            # Threads are lightweight! We can easily spawn one thread per game 
+            # (as long as it doesn't exceed our GPU queue batch size of 32).
+            num_workers = min(num_episodes, 32) 
+            print(f"Spawning {num_workers} threads to play {num_episodes} games...")
             
-            with concurrent.futures.ProcessPoolExecutor(max_workers=num_workers, mp_context=ctx) as executor:
-                # 1. Dispatch all games to the workers
+            # Changed to ThreadPoolExecutor and removed mp_context
+            with concurrent.futures.ThreadPoolExecutor(max_workers=num_workers) as executor:
+                # 1. Dispatch all games to the worker threads
                 futures = [executor.submit(self.execute_episode) for _ in range(num_episodes)]
                 
-                # 2. Collect the data as each worker finishes a game
+                # 2. Collect the data as each thread finishes a game
                 for count, future in enumerate(concurrent.futures.as_completed(futures), 1):
                     try:
                         game_history = future.result()
                         iteration_train_data.extend(game_history)
                         
-                        # Print progress every few games so you know it's not frozen
                         if count % max(1, (num_episodes // 5)) == 0:
                             print(f"  -> Completed {count}/{num_episodes} games...")
                     except Exception as e:
-                        print(f"A worker process crashed: {e}")
+                        print(f"A worker thread crashed: {e}")
 
-            # Add the parallel-generated data to our master buffer
             self.train_data.extend(iteration_train_data)
             print(f"Added {len(iteration_train_data)} moves to buffer. Total buffer: {len(self.train_data)}")
 
+            # -----------------------------------------------------------
             # PHASE 2: TRAINING
-            # Update the Neural Network weights using the buffer
+            # -----------------------------------------------------------
+            # Safety check in case threads failed
+            if len(self.train_data) == 0:
+                print("⚠️ Warning: Buffer is empty! Skipping training this iteration.")
+                continue
+
             self.train_network()
 
+            # -----------------------------------------------------------
             # PHASE 3: SAVE
-            # Keep a backup of the 'brain' after every iteration
+            # -----------------------------------------------------------
             self.nnet.save_checkpoint(folder=self.args['checkpoint'], filename=f'checkpoint_{i}.pth.tar')
 
     def train_network(self):
