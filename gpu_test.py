@@ -2,12 +2,18 @@ from alpha_worms.reflex_endpoint.game_engine import GameEngine
 from alpha_worms.nn import WormsPredictor
 from alpha_worms.main import Worms
 import torch
+import torch.multiprocessing as mp
 import time
 
 # MUST BE AT THE TOP: Prevents CPU thrashing in the workers
 torch.set_num_threads(1)
 
 if __name__ == '__main__':
+
+    try:
+        mp.set_start_method('spawn', force=True)
+    except RuntimeError:
+        pass
 
     # 1. Initialize Game and Brain
     game = GameEngine() 

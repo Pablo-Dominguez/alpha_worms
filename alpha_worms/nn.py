@@ -3,16 +3,16 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
+# import torch.multiprocessing as mp
 import numpy as np
-import threading
-import queue
-import time
+# import threading
+# import queue
+# import time
 from alpha_worms.reflex_endpoint.dto import GameDTO
 from alpha_worms.reflex_endpoint.tensor_engine import TensorEngine
 from alpha_worms.reflex_endpoint.game_engine import GameEngine
-import multiprocessing as mp
+# import multiprocessing as mp
 
-torch.set_num_threads(1) # Important for multiprocessing to prevent thread contention
 
 class ResBlock1D(nn.Module):
     def __init__(self, channels):
@@ -229,6 +229,34 @@ class WormsPredictor:
 
         return game.get_next_state(initial_state, top_moves[0])
 
+    def predict_batch(self, states):
+        """
+        Takes a list of canonical GameDTO states, stacks them into a single 
+        batch tensor, and performs lightning-fast GPU inference.
+        """
+        # 1. Convert all states to tensors using your TensorEngine
+        tensor_list = []
+        for s in states:
+            t = self.tensor_engine.to_tensor(s)
+            if not isinstance(t, torch.Tensor):
+                t = torch.from_numpy(t).float() # Convert if it's numpy
+            tensor_list.append(t)
+        
+        # 2. Stack into a single batch tensor: Shape (BatchSize, Channels, Height, Width)
+        batch_tensor = torch.stack(tensor_list).contiguous().to(self.device,dtype=torch.float32)
+        
+        # 3. Direct GPU Inference
+        self.nnet.eval()
+        with torch.no_grad():
+            pi, v = self.nnet(batch_tensor)
+            
+        # 4. Unpack results from GPU back to CPU numpy arrays
+        # Assuming your network outputs log_softmax for policy, we use torch.exp to get probabilities
+        policies = torch.exp(pi).data.cpu().numpy()
+        values = v.data.cpu().numpy().flatten()
+        
+        # Return arrays so the Chef loop can iterate and send them down the pipes
+        return policies, values
     # ## GPU methods:
     # def request_prediction(self, state):
     #     """
