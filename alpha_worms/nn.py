@@ -77,7 +77,7 @@ class WormsPredictor:
         self.tensor_engine = TensorEngine()
         self.share_memory() # Enable sharing for multiprocessing
         self.load_checkpoint(folder='./checkpoints/', filename='checkpoint_25.pth.tar')
-
+        print(f"Using device: {self.device}")
     def share_memory(self):
         """
         Allows the underlying PyTorch model weights to be shared across 

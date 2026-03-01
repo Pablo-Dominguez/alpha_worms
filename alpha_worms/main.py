@@ -72,40 +72,6 @@ class Worms:
                     for hist_state, hist_pi, hist_player in train_examples
                 ]
 
-    def parallel_self_play(self, num_games_to_play):
-        """
-        Orchestrates multiple games of self-play simultaneously across CPU cores.
-        """
-        all_new_examples = []
-        
-        # Determine how many workers we can safely use
-        # Leave 1 core free for OS background tasks
-        num_workers = max(1, mp.cpu_count() - 1) 
-        
-        print(f"Spawning {num_workers} parallel workers to play {num_games_to_play} games...")
-
-        # ProcessPoolExecutor creates isolated Python processes 
-        with concurrent.futures.ProcessPoolExecutor(max_workers=num_workers) as executor:
-            
-            # Submit all games to the queue
-            # We use an underscore because we just need to run it N times
-            futures = [executor.submit(self.execute_episode) for _ in range(num_games_to_play)]
-            
-            # As each game completes, grab its data
-            for i, future in enumerate(concurrent.futures.as_completed(futures)):
-                try:
-                    game_history = future.result()
-                    all_new_examples.extend(game_history)
-                    print(f"Game {i+1}/{num_games_to_play} completed. Generated {len(game_history)} moves.")
-                except Exception as e:
-                    print(f"A worker process crashed: {e}")
-
-        # Add the collected batch to your main training deque
-        self.train_data.extend(all_new_examples)
-        
-        print(f"Parallel self-play complete! Added {len(all_new_examples)} total moves to buffer.")
-        return all_new_examples
-
     def learn(self):
         """
         The main training loop, supercharged for parallel self-play.
@@ -113,6 +79,7 @@ class Worms:
         # CRITICAL: Tell PyTorch to share the model's memory across processes
         self.nnet.share_memory()
         
+        num_workers = 3
         # CRITICAL FOR GPU LATER: Force PyTorch to use 'spawn' to prevent freezing
         try:
             mp.set_start_method('spawn', force=True)
@@ -127,10 +94,11 @@ class Worms:
             num_episodes = self.args['num_episodes']
             
             # Reserve 1 core for the OS so your computer doesn't freeze
-            num_workers = min(5, max(1, mp.cpu_count() - 1))
+            num_workers = min(num_workers, max(1, mp.cpu_count() - 1))
             print(f"Spawning {num_workers} workers to play {num_episodes} games...")
+            ctx = mp.get_context('spawn')
             
-            with concurrent.futures.ProcessPoolExecutor(max_workers=num_workers) as executor:
+            with concurrent.futures.ProcessPoolExecutor(max_workers=num_workers, mp_context=ctx) as executor:
                 # 1. Dispatch all games to the workers
                 futures = [executor.submit(self.execute_episode) for _ in range(num_episodes)]
                 
