@@ -19,7 +19,7 @@ if __name__ == '__main__':
         'numMCTSSims': 50,        # Up from 10. Forces the MCTS to search deeper and query the GPU more often.
         'cpuct': 1.41,
         'num_iterations': 3,      # 3 full loops of Play -> Train -> Save
-        'num_episodes': 32,       # THE MAGIC NUMBER: Spawns 32 threads. Fills your GPU queue for maximum batching efficiency!
+        'num_episodes': 4,       # THE MAGIC NUMBER: Spawns 32 threads. Fills your GPU queue for maximum batching efficiency!
         'batch_size': 64,         # Up from 8. Safe for 4GB VRAM during the neural network backpropagation phase.
         'max_buffer_size': 10000,
         'checkpoint': './checkpointsv2/'
