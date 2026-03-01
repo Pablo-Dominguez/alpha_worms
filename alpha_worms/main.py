@@ -2,7 +2,6 @@ from alpha_worms.reflex_endpoint.game_engine import GameEngine
 from alpha_worms.nn import WormsPredictor
 from alpha_worms.mcts import MCTS
 import concurrent.futures
-import multiprocessing as mp
 import numpy as np
 from collections import deque
 import random

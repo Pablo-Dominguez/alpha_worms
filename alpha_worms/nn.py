@@ -10,6 +10,7 @@ import time
 from alpha_worms.reflex_endpoint.dto import GameDTO
 from alpha_worms.reflex_endpoint.tensor_engine import TensorEngine
 from alpha_worms.reflex_endpoint.game_engine import GameEngine
+import multiprocessing as mp
 
 torch.set_num_threads(1) # Important for multiprocessing to prevent thread contention
 
@@ -83,7 +84,7 @@ class WormsPredictor:
         print(f"Using device: {self.device}")
 
         # 1. THE QUEUE SYSTEM
-        self.prediction_queue = queue.Queue()
+        self.prediction_queue = mp.Manager().Queue()
         self.batch_size = 32 # Maximum items to scoop up at once
         
         # 2. START THE GPU WORKER THREAD
