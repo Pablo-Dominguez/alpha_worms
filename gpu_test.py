@@ -22,12 +22,11 @@ if __name__ == '__main__':
     # 2. Define STRESS TEST Hyperparameters for RTX 3050 Ti
     args = {
         'lr': 0.001,
-        'numMCTSSims': 100,       # Deeper search = More GPU work per move
+        'numMCTSSims': 100,       
         'cpuct': 1.41,
         'num_iterations': 1,
-        'num_episodes': 32,       # INCREASE THIS: Use all your CPU cores! 
-                                # This creates enough "waiters" to fill your batch_size.
-        'batch_size': 64,         # Keep at 64. Great for 4GB VRAM.
+        'num_episodes': 32,       # Keep at 32 (Your CPU handles this well)
+        'batch_size': 32,         # MATCH THIS TO EPISODES: No more waiting for empty slots!
         'max_buffer_size': 10000,
         'checkpoint': './checkpointsv2/'
     }
