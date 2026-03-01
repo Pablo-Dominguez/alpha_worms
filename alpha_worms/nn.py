@@ -76,6 +76,7 @@ class WormsPredictor:
         self.optimizer = optim.Adam(self.nnet.parameters(), lr=0.001, weight_decay=1e-4)
         self.tensor_engine = TensorEngine()
         self.share_memory() # Enable sharing for multiprocessing
+        self.load_checkpoint(folder='./checkpoints/', filename='checkpoint_25.pth.tar')
 
     def share_memory(self):
         """
@@ -182,7 +183,7 @@ class WormsPredictor:
     
     def nn_next_move(self, game_dto: GameDTO):
         # Placeholder for neural network inference logic
-        self.load_checkpoint(folder='./checkpoints/', filename='checkpoint_15.pth.tar')
+        # self.load_checkpoint(folder='./checkpoints/', filename='checkpoint_25.pth.tar')
         # Here you would typically pass the tensor through your trained model to get move probabilities
         # For demonstration, we'll just return a dummy move
         game = GameEngine()
