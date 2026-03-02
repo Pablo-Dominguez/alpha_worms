@@ -16,7 +16,7 @@ class Worms:
         self.game = game
         self.nnet = nnet
         self.args = args  
-        self.train_data = deque(maxlen=args['max_buffer_size'],50000)
+        self.train_data = deque(maxlen=args.get('max_buffer_size', 50000))
 
     @staticmethod
     def execute_episode(game, mcts=None):
@@ -237,7 +237,7 @@ class Worms:
             # We sample a random batch to break the correlation between consecutive moves
             batch_size = min(len(self.train_data), self.args['batch_size'])
             batch = random.sample(self.train_data, batch_size)
-            
+            # need to order the batch examples and convert them to tensor history
             # The predictor.train method we built previously expects a list of examples
             # and handles the tensor conversion itself.
             try:
