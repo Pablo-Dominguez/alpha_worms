@@ -19,14 +19,28 @@ if __name__ == '__main__':
     # 2. Define TINY Hyperparameters for testing
     args = {
         'lr': 0.001,              
-        'numMCTSSims': 100,       # REDUCED: 100 sims strikes the perfect balance between smart moves and speed.
+        # Sims: On CPU, 25-40 is enough to see if MCTS is actually 'thinking'
+        # without waiting 5 minutes per move.
+        'numMCTSSims': 25,       
+        
         'cpuct': 1.25,            
-        'num_iterations': 1,     # REDUCED: 25 iterations will give a clear learning curve.
-        'num_episodes': 2,       # REDUCED: 40 games / 5 workers = 8 games per worker per iteration. Very manageable.
-        'batch_size': 64,         
-        'max_buffer_size': 10000, # Cap the buffer slightly to save RAM over the 24 hours.
+        
+        # Iterations: Keep this at 1 or 2 for a "Smoke Test"
+        'num_iterations': 2,     
+        
+        # Episodes: Very low for a test run. This will result in 1 game 
+        # per worker if you have 2 workers.
+        'num_episodes': 2,       
+        
+        # Batch Size: Smaller batches are better for CPU memory cache.
+        'batch_size': 32,         
+        
+        'max_buffer_size': 1000, 
         'checkpoint': './checkpoints/',
-        'train_epochs': 2
+        
+        # Train Epochs: 1 is enough to verify the backpropagation 
+        # logic works without overheating the CPU.
+        'train_epochs': 1         
     }
 
     # 3. Initialize the Trainer
