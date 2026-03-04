@@ -19,7 +19,7 @@ class Worms:
         self.train_data = deque(maxlen=args.get('max_buffer_size', 50000))
 
     @staticmethod
-    def execute_episode(game, mcts=None):
+    def execute_episode(game, mcts=None, nnet=None):
         train_examples = []
         state = game.get_initial_state()
         curr_player = 1 
@@ -51,7 +51,7 @@ class Worms:
                 for hist_state_dto, hist_pi, hist_player in train_examples:
                     # 1. Transform DTO + History -> Stacked Tensor
                     # Assuming 'game' has access to the to_temporal_tensor method
-                    state_tensor = game.to_temporal_tensor(hist_state_dto)
+                    state_tensor = nnet.tensor_engine.to_temporal_tensor(hist_state_dto)
                     
                     # 2. Calculate perspective-correct reward
                     z = reward * ((-1)**(hist_player != 1))
@@ -158,7 +158,7 @@ class Worms:
                 p = mp.Process(
                     target=Worms.worker_play_games,
                     args=(worker_id, games_per_worker, request_queue, child_pipes[worker_id], 
-                        self.args, self.game)
+                        self.args, self.game, self.nnet)
                 )
                 p.start()
                 processes.append(p)
@@ -240,7 +240,7 @@ class Worms:
                 raise e
     
     @staticmethod
-    def worker_play_games(worker_id, num_games, request_queue, worker_pipe, args, game):
+    def worker_play_games(worker_id, num_games, request_queue, worker_pipe, args, game, nnet):
         """
         The isolated process that runs the games and MCTS on a single CPU core.
         """
@@ -256,7 +256,7 @@ class Worms:
             # NOTE: You will need to ensure your self.execute_episode() 
             # uses this specific 'mcts' instance! 
             # Example: game_history = self.execute_episode(mcts)
-            game_history = Worms.execute_episode(game, mcts=mcts) 
+            game_history = Worms.execute_episode(game, mcts=mcts, nnet=nnet) 
             
             worker_train_data.extend(game_history)
             print(f"Worker {worker_id} completed game {game_num}/{num_games}")

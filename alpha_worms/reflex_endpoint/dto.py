@@ -1,11 +1,11 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from alpha_worms.reflex_endpoint.models import Dices, Pieces
 
 class GameDTO(BaseModel):
     dice_map: Dices
     board_map: Pieces
-    # Use Optional["GameDTO"] or "GameDTO | None" to allow the default None
-    previous_dto: "GameDTO" | None = None
+    # Wrap the entire type expression in quotes
+    previous_dto: "GameDTO | None" = Field(default=None, exclude=True)
 
-# Add this right after the class definition
+# Essential for Pydantic to resolve the string above
 GameDTO.model_rebuild()

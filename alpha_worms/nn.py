@@ -129,7 +129,14 @@ class WormsPredictor:
         # Unpack examples
         states, target_pis, target_vs = list(zip(*examples))
 
-        encoded_states = [self.tensor_engine.to_temporal_tensor(state) for state in states]
+        encoded_states = []
+        for state in states:
+            if isinstance(state, np.ndarray):
+                # Already a tensor (from experience replay/worker)
+                encoded_states.append(state)
+            else:
+                # Still a DTO (from manual testing or initial state)
+                encoded_states.append(self.tensor_engine.to_temporal_tensor(state))
         try:
             new_states = torch.FloatTensor(np.array(encoded_states)).to(self.device)
             target_pis = torch.FloatTensor(np.array(target_pis)).to(self.device)
