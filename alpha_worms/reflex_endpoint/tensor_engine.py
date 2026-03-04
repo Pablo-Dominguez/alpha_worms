@@ -70,6 +70,39 @@ class TensorEngine:
             tensor[32 + i, :] = new_layer
 
         return tensor
+    
+    def to_temporal_tensor(self, current_dto: GameDTO, T=5):
+        """
+        Climbs the GameDTO 'previous_dto' tree to build a stacked history.
+        """
+        history = []
+        temp_dto = current_dto
+        
+        # Collect up to T historical DTOs
+        while temp_dto is not None and len(history) < T:
+            history.append(temp_dto)
+            temp_dto = temp_dto.previous_dto
+            
+        # Now we have [Current, Prev, Prev-Prev...]
+        # We call your existing to_tensor for each one
+        layers = []
+        for i in range(T):
+            if i < len(history):
+                # Use your original method
+                single_tensor = self.to_tensor(history[i])
+                # Strip the turn indicator (last layer) to keep it as a board-state only
+                layers.append(single_tensor[:54, :])
+            else:
+                # Padding for the start of the game
+                layers.append(np.zeros((54, 33), dtype=np.float32))
+                
+        # Combine history: (54 * T, 33)
+        history_stack = np.concatenate(layers, axis=0)
+        
+        # Add the current turn indicator as the final layer
+        current_turn = self.to_tensor(current_dto)[54:55, :]
+        
+        return np.concatenate([history_stack, current_turn], axis=0) 
 
     def to_pillow_heatmap(self, tensor):
 

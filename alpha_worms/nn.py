@@ -28,45 +28,45 @@ class ResBlock1D(nn.Module):
         out = self.bn2(self.conv2(out))
         out += residual # Skip connection
         return F.relu(out)
-
 class WormsNet(nn.Module):
-    def __init__(self, input_planes=55, board_slots=33, action_size=25):
+    def __init__(self, input_planes=271, board_slots=33, action_size=25):
         super(WormsNet, self).__init__()
-        self.num_channels = 128 # The "Brain Power" hyperparameter
+        self.num_channels = 128 
         
-        # 1. Initial Block: Takes 55 planes and expands them to 128
+        # 1. Initial Block: Now handles the larger input stack
         self.conv_input = nn.Conv1d(input_planes, self.num_channels, kernel_size=3, padding=1, bias=False)
         self.bn_input = nn.BatchNorm1d(self.num_channels)
         
-        # 2. Residual Tower: 10 layers of deep thinking
+        # 2. Residual Tower
         self.res_tower = nn.Sequential(
             *[ResBlock1D(self.num_channels) for _ in range(10)]
         )
         
-        # 3. Policy Head: Predicts the best of the 25 moves
+        # 3. Policy Head
         self.policy_conv = nn.Conv1d(self.num_channels, 2, kernel_size=1, bias=False)
         self.policy_bn = nn.BatchNorm1d(2)
+        # 2 (planes) * 33 (slots) = 66
         self.policy_fc = nn.Linear(2 * board_slots, action_size)
         
-        # 4. Value Head: Predicts if the current player is winning (-1 to 1)
+        # 4. Value Head
         self.value_conv = nn.Conv1d(self.num_channels, 1, kernel_size=1, bias=False)
         self.value_bn = nn.BatchNorm1d(1)
-        self.value_fc1 = nn.Linear(board_slots, 64)
-        self.value_fc2 = nn.Linear(64, 1)
+        self.value_fc1 = nn.Linear(board_slots, 128) # Increased slightly for better capacity
+        self.value_fc2 = nn.Linear(128, 1)
 
     def forward(self, s):
-        # s shape: (batch_size, 55, 33)
+        # s shape: (batch_size, 271, 33) (channel-1 x T) + 1
         s = F.relu(self.bn_input(self.conv_input(s)))
         s = self.res_tower(s)
         
-        # Policy Head
+        # Policy Head: Returns Log Softmax (best for NLLLoss / KL Divergence)
         p = F.relu(self.policy_bn(self.policy_conv(s)))
-        p = p.view(p.size(0), -1) # Flatten to (batch, 66)
+        p = p.flatten(1) # More readable than view()
         p = F.log_softmax(self.policy_fc(p), dim=1)
         
-        # Value Head
+        # Value Head: Returns value in range [-1, 1]
         v = F.relu(self.value_bn(self.value_conv(s)))
-        v = v.view(v.size(0), -1) # Flatten to (batch, 33)
+        v = v.flatten(1) 
         v = F.relu(self.value_fc1(v))
         v = torch.tanh(self.value_fc2(v))
         
@@ -105,7 +105,7 @@ class WormsPredictor:
         Output: Policy (numpy), Value (float)
         Used by MCTS.
         """
-        state = self.tensor_engine.to_tensor(state)
+        state = self.tensor_engine.to_temporal_tensor(state)
 
         # Prepare state for the network
         state_tensor = torch.FloatTensor(state.astype(np.float32)).to(self.device)
@@ -129,7 +129,7 @@ class WormsPredictor:
         # Unpack examples
         states, target_pis, target_vs = list(zip(*examples))
 
-        encoded_states = [self.tensor_engine.to_tensor(state) for state in states]
+        encoded_states = [self.tensor_engine.to_temporal_tensor(state) for state in states]
         try:
             new_states = torch.FloatTensor(np.array(encoded_states)).to(self.device)
             target_pis = torch.FloatTensor(np.array(target_pis)).to(self.device)

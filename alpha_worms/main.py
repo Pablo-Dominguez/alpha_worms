@@ -20,61 +20,49 @@ class Worms:
 
     @staticmethod
     def execute_episode(game, mcts=None):
-        """
-        Executes one full game of self-play using MCTS.
-        """
         train_examples = []
         state = game.get_initial_state()
-        
-        # curr_player tracks the 'real' identity (1 or -1)
-        # so we can assign the correct reward at the end.
         curr_player = 1 
 
-        # We refresh MCTS for every new game to clear the tree
-
         while True:
-            # 1. CANONICALIZE: Always present the board to the MCTS/NN 
-            # as if it is Player 1's turn.
             canonical_state = game.get_canonical_form(state)
+            pi = mcts.get_action_probs(canonical_state, temp=1)
             
-            # 2. MCTS SEARCH: Get move probabilities for the canonical state
-            pi = mcts.get_action_probs(canonical_state, temp=1) # should review temp usage
-            
-            # 3. STORE EXPERIENCE: Record the state from the perspective 
-            # of the player whose turn it was.
-            train_examples.append([canonical_state, pi, curr_player]) # review curr_player usage
+            # Store the DTO temporarily during the game
+            train_examples.append([canonical_state, pi, curr_player])
 
-            # 4. ACTION: Pick a move
             action = np.random.choice(len(pi), p=pi)
+            next_s = game.get_next_state(state, action)
             
-            # 5. TRANSITION: Get next state and check if the turn switched
-            # Based on our previous discussion, your engine returns (state, turn_switched)
+            # Link the history for the NEXT step's canonicalization
+            next_s.previous_dto = state 
             
-            try:
-                next_s = game.get_next_state(state, action)
-            except Exception as e:
-                print('Pi',pi)
-                print('Selected action',action)
-                print(f"Error in get_next_state: {e}")
-                raise e
             turn_switched = next_s.board_map.current_player != state.board_map.current_player
             state = next_s
 
             if turn_switched:
                 curr_player *= -1
 
-            # 6. TERMINAL CHECK
             reward = game.get_winner(state)
 
             if reward != 0:
-                # Game over! 
-                # 'reward' is usually 1 (P1 wins), -1 (P2 wins), or 0.1 (draw)
-                # We return a list of (state, pi, z) where z is the result 
-                # from the perspective of the player who was acting at that state.
-                return [
-                    (hist_state, hist_pi, reward * ((-1)**(hist_player != 1))) 
-                    for hist_state, hist_pi, hist_player in train_examples
-                ]
+                # --- THE FIX: Convert to Tensors and break links ---
+                final_examples = []
+                for hist_state_dto, hist_pi, hist_player in train_examples:
+                    # 1. Transform DTO + History -> Stacked Tensor
+                    # Assuming 'game' has access to the to_temporal_tensor method
+                    state_tensor = game.to_temporal_tensor(hist_state_dto)
+                    
+                    # 2. Calculate perspective-correct reward
+                    z = reward * ((-1)**(hist_player != 1))
+                    
+                    # 3. Store only the raw data (tensor, pi, z)
+                    final_examples.append((state_tensor, hist_pi, z))
+                    
+                    # 4. Explicitly break link to help GC (optional but safer)
+                    hist_state_dto.previous_dto = None
+                    
+                return final_examples
 
     def load_model(self):
         """
@@ -295,7 +283,7 @@ class IPCPredictorProxy:
     def predict(self, state):
         # 1. Convert DTO to a simple NumPy array/Tensor INSIDE the worker
         # This is much "lighter" to pickle than a full DTO object
-        raw_tensor = self.tensor_engine.to_tensor(state)
+        raw_tensor = self.tensor_engine.to_temporal_tensor(state)
         # If it's already a Torch Tensor, move it to CPU and convert to Numpy 
         # to ensure the most efficient pickling across the IPC pipe.
         if isinstance(raw_tensor, torch.Tensor):
