@@ -31,7 +31,7 @@ class ResBlock1D(nn.Module):
 class WormsNet(nn.Module):
     def __init__(self, input_planes=271, board_slots=33, action_size=25):
         super(WormsNet, self).__init__()
-        self.num_channels = 128 
+        self.num_channels = 64 
         
         # 1. Initial Block: Now handles the larger input stack
         self.conv_input = nn.Conv1d(input_planes, self.num_channels, kernel_size=3, padding=1, bias=False)
@@ -39,7 +39,7 @@ class WormsNet(nn.Module):
         
         # 2. Residual Tower
         self.res_tower = nn.Sequential(
-            *[ResBlock1D(self.num_channels) for _ in range(10)]
+            *[ResBlock1D(self.num_channels) for _ in range(5)]
         )
         
         # 3. Policy Head
@@ -51,8 +51,8 @@ class WormsNet(nn.Module):
         # 4. Value Head
         self.value_conv = nn.Conv1d(self.num_channels, 1, kernel_size=1, bias=False)
         self.value_bn = nn.BatchNorm1d(1)
-        self.value_fc1 = nn.Linear(board_slots, 128) # Increased slightly for better capacity
-        self.value_fc2 = nn.Linear(128, 1)
+        self.value_fc1 = nn.Linear(board_slots, 64) # Increased slightly for better capacity
+        self.value_fc2 = nn.Linear(64, 1)
 
     def forward(self, s):
         # s shape: (batch_size, 271, 33) (channel-1 x T) + 1

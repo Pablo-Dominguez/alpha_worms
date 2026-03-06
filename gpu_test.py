@@ -21,15 +21,16 @@ if __name__ == '__main__':
 
     # 2. Define STRESS TEST Hyperparameters for RTX 3050 Ti
     args = {
-        'lr': 0.001,
-        'numMCTSSims': 100,       
-        'cpuct': 1.41,
-        'num_iterations': 1,
-        'num_episodes': 32,       # Keep at 32 (Your CPU handles this well)
-        'batch_size': 32,         # MATCH THIS TO EPISODES: No more waiting for empty slots!
-        'train_epochs': 20,
-        'max_buffer_size': 10000,
-        'checkpoint': './checkpointsv2/'
+        'lr': 0.001,              
+        'numMCTSSims': 60,        # Increased: Higher quality moves, still fast on CPU workers
+        'cpuct': 1.41,            # Classic AlphaZero constant for exploration
+        'num_iterations': 100,    # Run as many as possible in 24h
+        'num_episodes': 40,       # More games per iteration for a richer replay buffer
+        'batch_size': 256,        # GPU can handle large batches (much faster training)
+        'max_buffer_size': 50000, # Large buffer to prevent catastrophic forgetting
+        'checkpoint': './checkpoints/',
+        'train_epochs': 5,        # Spend more time optimizing each batch on GPU
+        # 'arenaCompare': 10,       # Number of games to play for the progress logger
     }
 
     # 3. Initialize the Trainer
