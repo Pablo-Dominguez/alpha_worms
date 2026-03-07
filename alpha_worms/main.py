@@ -19,7 +19,7 @@ class Worms:
         self.train_data = deque(maxlen=args.get('max_buffer_size', 50000))
 
     @staticmethod
-    def execute_episode(game, mcts=None, nnet=None):
+    def execute_episode(game, mcts=None, tensor_engine=None):
         train_examples = []
         state = game.get_initial_state()
         curr_player = 1 
@@ -51,7 +51,7 @@ class Worms:
                 for hist_state_dto, hist_pi, hist_player in train_examples:
                     # 1. Transform DTO + History -> Stacked Tensor
                     # Assuming 'game' has access to the to_temporal_tensor method
-                    state_tensor = nnet.tensor_engine.to_temporal_tensor(hist_state_dto)
+                    state_tensor = tensor_engine.to_temporal_tensor(hist_state_dto)
                     
                     # 2. Calculate perspective-correct reward
                     z = reward * ((-1)**(hist_player != 1))
@@ -158,7 +158,7 @@ class Worms:
                 p = mp.Process(
                     target=Worms.worker_play_games,
                     args=(worker_id, games_per_worker, request_queue, child_pipes[worker_id], 
-                        self.args, self.game, self.nnet)
+                        self.args, self.game)
                 )
                 p.start()
                 processes.append(p)
@@ -240,12 +240,16 @@ class Worms:
                 raise e
     
     @staticmethod
-    def worker_play_games(worker_id, num_games, request_queue, worker_pipe, args, game, nnet):
+    def worker_play_games(worker_id, num_games, request_queue, worker_pipe, args, game):
         """
         The isolated process that runs the games and MCTS on a single CPU core.
         """
         # 1. Create the fake predictor
         proxy_nnet = IPCPredictorProxy(worker_id, request_queue, worker_pipe)
+
+        # Each worker gets its own CPU-based tensor engine for DTO conversion
+        from alpha_worms.reflex_endpoint.tensor_engine import TensorEngine
+        local_tensor_engine = TensorEngine()
         
         worker_train_data = []
         
@@ -256,7 +260,7 @@ class Worms:
             # NOTE: You will need to ensure your self.execute_episode() 
             # uses this specific 'mcts' instance! 
             # Example: game_history = self.execute_episode(mcts)
-            game_history = Worms.execute_episode(game, mcts=mcts, nnet=nnet) 
+            game_history = Worms.execute_episode(game, mcts=mcts,tensor_engine=local_tensor_engine)
             
             worker_train_data.extend(game_history)
             print(f"Worker {worker_id} completed game {game_num}/{num_games}")
