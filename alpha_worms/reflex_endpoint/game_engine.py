@@ -286,18 +286,50 @@ class GameEngine(RawEngine):
 
         return canonical_dto
 
-    def _get_canonical_history(self, dto: GameDTO, swap: bool) -> GameDTO:
-        """Helper to maintain the swap state down the history chain."""
-        new_board = dto.board_map.model_copy(deep=True)
-        if swap:
-            new_board.player01_stack, new_board.player02_stack = (
-                dto.board_map.player02_stack, dto.board_map.player01_stack
-            )
-            # Flip the turn indicator for historical accuracy in the tensor
-            new_board.current_player = 1 if dto.board_map.current_player == 2 else 2
+    def _get_canonical_history(self, dto: GameDTO, swap: bool, max_depth: int = 7) -> GameDTO:
+        """
+        Iterative helper to maintain the swap state down the history chain.
+        Prevents RecursionError and limits history depth to save memory and CPU.
+        """
+        if dto is None:
+            return None
 
-        new_dto = GameDTO(dice_map=dto.dice_map.model_copy(deep=True), board_map=new_board)
+        # Helper to apply your exact transformation logic to a single node
+        def _process_node(node_dto: GameDTO) -> GameDTO:
+            new_board = node_dto.board_map.model_copy(deep=True)
+            if swap:
+                new_board.player01_stack, new_board.player02_stack = (
+                    node_dto.board_map.player02_stack, node_dto.board_map.player01_stack
+                )
+                # Flip the turn indicator for historical accuracy in the tensor
+                new_board.current_player = 1 if node_dto.board_map.current_player == 2 else 2
+                
+            return GameDTO(dice_map=node_dto.dice_map.model_copy(deep=True), board_map=new_board)
+
+        # 1. Process the head of the chain (current state)
+        head_new_dto = _process_node(dto)
         
-        if dto.previous_dto:
-            new_dto.previous_dto = self._get_canonical_history(dto.previous_dto, swap)
-        return new_dto
+        # 2. Setup pointers for the iterative traversal
+        current_new = head_new_dto
+        current_old = dto.previous_dto
+        depth = 1 # The head counts as depth 1
+
+        # 3. Walk backwards down the linked list using a while loop
+        while current_old is not None and depth <= max_depth:
+            # Copy and swap the historical state
+            next_new_dto = _process_node(current_old)
+            
+            # Link it to our newly built chain
+            current_new.previous_dto = next_new_dto
+            
+            # Move the pointers forward
+            current_new = next_new_dto
+            current_old = current_old.previous_dto
+            depth += 1
+
+        # 4. Explicitly sever the chain here.
+        # This acts as a firewall against memory leaks, ensuring the garbage 
+        # collector can delete the rest of the 1000+ move history.
+        current_new.previous_dto = None
+
+        return head_new_dto
