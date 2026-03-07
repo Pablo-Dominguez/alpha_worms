@@ -23,8 +23,12 @@ class Worms:
         train_examples = []
         state = game.get_initial_state()
         curr_player = 1 
+        turn_count = 0        # 1. Add a turn counter
+        max_turns = 150       # 2. Set a reasonable upper limit for a game of Worms
 
         while True:
+            turn_count += 1
+
             canonical_state = game.get_canonical_form(state)
             pi = mcts.get_action_probs(canonical_state, temp=1)
             
@@ -44,6 +48,11 @@ class Worms:
                 curr_player *= -1
 
             reward = game.get_winner(state)
+
+            # 4. Check for a forced draw if the game drags on too long
+            if turn_count >= max_turns and reward == 0:
+                reward = 1 # A tiny, non-zero draw value (or just 0 if your engine handles strict draws)
+                print(f"Game hit turn limit ({max_turns})! Forcing draw.")
 
             if reward != 0:
                 # --- THE FIX: Convert to Tensors and break links ---
