@@ -51,8 +51,8 @@ class Worms:
                 for hist_state_dto, hist_pi, hist_player in train_examples:
                     # 1. Transform DTO + History -> Stacked Tensor
                     # Assuming 'game' has access to the to_temporal_tensor method
-                    state_tensor = tensor_engine.to_temporal_tensor(hist_state_dto)
-                    
+                    raw_tensor = tensor_engine.to_temporal_tensor(hist_state_dto)
+                    state_tensor = np.array(raw_tensor, copy=True, dtype=np.float32)
                     # 2. Calculate perspective-correct reward
                     z = reward * ((-1)**(hist_player != 1))
                     
@@ -61,7 +61,8 @@ class Worms:
                     
                     # 4. Explicitly break link to help GC (optional but safer)
                     hist_state_dto.previous_dto = None
-                    
+                
+                train_examples.clear()
                 return final_examples
 
     def load_model(self):
@@ -194,6 +195,12 @@ class Worms:
             for p in processes:
                 p.join()
                 
+            # --- FIX 3: CLOSE MULTIPROCESSING RESOURCES ---
+            request_queue.close()
+            request_queue.join_thread() # Kill the background buffer thread
+            for p_pipe, c_pipe in zip(parent_pipes, child_pipes):
+                p_pipe.close()
+                c_pipe.close()
             # --- PERSISTENCE LAYER ---
             if len(iteration_train_data) > 0:
                 self.save_iteration_data(i, iteration_train_data)
@@ -268,6 +275,8 @@ class Worms:
         # 3. Game over! Send the training data to the Chef
         request_queue.put(("DATA", worker_train_data))
         
+        # --- FIX 4: FREE WORKER MEMORY IMMEDIATELY ---
+        worker_train_data = []
         # 4. Tell the Chef this worker is clocking out
         request_queue.put("DONE")
         
@@ -293,8 +302,9 @@ class IPCPredictorProxy:
         if isinstance(raw_tensor, torch.Tensor):
             raw_tensor = raw_tensor.detach().cpu().numpy()
 
+        safe_tensor = np.array(raw_tensor, copy=True, dtype=np.float32)
         # 2. Send the raw data, not the DTO
-        self.request_queue.put((self.worker_id, raw_tensor))
+        self.request_queue.put((self.worker_id, safe_tensor))
         
         policy, value = self.worker_pipe.recv() 
         return policy, value
