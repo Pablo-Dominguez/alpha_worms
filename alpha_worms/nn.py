@@ -80,7 +80,7 @@ class WormsPredictor:
         self.optimizer = optim.Adam(self.nnet.parameters(), lr=0.001, weight_decay=1e-4)
         self.tensor_engine = TensorEngine()
         # self.share_memory() # Enable sharing for multiprocessing
-        self.load_checkpoint(folder='./checkpoints/', filename='checkpoint_25.pth.tar')
+        # self.load_checkpoint(folder='./checkpoints/', filename='checkpoint_25.pth.tar')
         print(f"Using device: {self.device}")
 
         # 1. THE QUEUE SYSTEM
@@ -188,7 +188,7 @@ class WormsPredictor:
         Loads weights into the NN from a saved file.
         """
         # Get absolute path and include it before the folder
-        abspath = '/home/pablo/Documents/projects/alpha_worms/'
+        abspath = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         filepath = os.path.join(abspath, folder, filename)
         if not os.path.exists(filepath):
             print(f"No checkpoint found at {filepath}. Starting with fresh weights.")
