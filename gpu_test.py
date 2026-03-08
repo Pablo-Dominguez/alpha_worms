@@ -26,10 +26,10 @@ if __name__ == '__main__':
         'cpuct': 1.41,            # Classic AlphaZero constant for exploration
         'num_iterations': 100,    # Run as many as possible in 24h
         'num_episodes': 30,       # More games per iteration for a richer replay buffer
-        'batch_size': 256,        # GPU can handle large batches (much faster training)
+        'batch_size': 64,        # GPU can handle large batches (much faster training)
         'max_buffer_size': 50000, # Large buffer to prevent catastrophic forgetting
         'checkpoint': './checkpoints/',
-        'train_epochs': 5,        # Spend more time optimizing each batch on GPU
+        'train_epochs': 4,        # Spend more time optimizing each batch on GPU
         # 'arenaCompare': 10,       # Number of games to play for the progress logger
     }
 
