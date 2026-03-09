@@ -22,9 +22,9 @@ if __name__ == '__main__':
     # 2. Define STRESS TEST Hyperparameters for RTX 3050 Ti
     args = {
         'lr': 0.001,              
-        'numMCTSSims': 60,        # Increased: Higher quality moves, still fast on CPU workers
+        'numMCTSSims': 80,        # Increased: Higher quality moves, still fast on CPU workers
         'cpuct': 1.41,            # Classic AlphaZero constant for exploration
-        'num_iterations': 100,    # Run as many as possible in 24h
+        'num_iterations': 10,    # Run as many as possible in 24h
         'num_episodes': 30,       # More games per iteration for a richer replay buffer
         'batch_size': 64,        # GPU can handle large batches (much faster training)
         'max_buffer_size': 50000, # Large buffer to prevent catastrophic forgetting

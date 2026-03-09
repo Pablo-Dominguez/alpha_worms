@@ -34,50 +34,54 @@ class MCTS:
         """
         Standard AlphaZero action probability generation, with valid move masking.
         """
-        for i in range(self.args['numMCTSSims']):
-            self.search(state)
-
         s = self.get_string_hash(state)
         
-        # 1. Get the binary mask of valid moves for this specific state
-        # (Adjust the method name to whatever you used in GameEngine)
-        valids = self.game.get_allowed_moves(state) 
+        # 1. Ensure the root node is expanded before we add noise
+        if s not in self.Ps:
+            self.search(state) 
+            
+        # 2. Add Dirichlet Noise to the Root ONCE
+        epsilon = 0.25
+        alpha = 0.3
+        valids = self.game.get_allowed_moves(state)
         
-        # 2. Get the visit counts
-        counts = [self.Nsa.get((s, a), 0) for a in range(self.game.game_size)]
+        noise = np.random.dirichlet([alpha] * self.game.game_size)
+        self.Ps[s] = (1 - epsilon) * self.Ps[s] + epsilon * noise
+        
+        # Re-mask and re-normalize
+        self.Ps[s] *= valids
+        sum_Ps = np.sum(self.Ps[s])
+        if sum_Ps > 0:
+            self.Ps[s] /= sum_Ps
+        else:
+            self.Ps[s] = valids / np.sum(valids)
 
-        # 3. MASKING: Multiply counts by the valid mask. 
-        # Illegal moves instantly become 0.
+        # 3. Run the rest of the MCTS Simulations
+        for i in range(self.args['numMCTSSims'] - 1):
+            self.search(state)
+
+        # 4. Calculate Action Probabilities
+        counts = [self.Nsa.get((s, a), 0) for a in range(self.game.game_size)]
         counts = [c * v for c, v in zip(counts, valids)]
 
         if temp == 0:
-            # Now, np.max will only look at valid moves (or 0 if none were visited)
             max_count = np.max(counts)
-            
-            # Find all VALID actions that match the max count
             best_as = [a for a in range(self.game.game_size) if counts[a] == max_count and valids[a]]
-            
             best_a = np.random.choice(best_as)
             probs = [0] * len(counts)
             probs[best_a] = 1
             return probs
 
-        # Softmax-like temperature scaling
-        counts = [x ** (1. / temp) for x in counts]
-        
-        # Re-mask just to be absolutely certain temperature scaling didn't revive a zero
+        # Safety fix: Normalize counts before applying temperature to prevent overflow
+        max_c = max(counts) if max(counts) > 0 else 1
+        counts = [(x / max_c) ** (1. / temp) for x in counts]
         counts = [c * v for c, v in zip(counts, valids)] 
         
         counts_sum = float(sum(counts))
-        
-        # Fallback: If for some reason sum is 0 (e.g., no valid moves were explored),
-        # return a uniform probability across all valid moves to prevent division by zero.
         if counts_sum == 0:
-            probs = [v / sum(valids) for v in valids]
-            return probs
+            return [v / sum(valids) for v in valids]
             
-        probs = [x / counts_sum for x in counts]
-        return probs
+        return [x / counts_sum for x in counts]
 
     def search(self, state: GameDTO):
         """
@@ -115,6 +119,21 @@ class MCTS:
             self.Vs[s] = current_valids 
             self.Ns[s] = 0
             return v
+        
+        # --- ADDING NOISE AT THE ROOT ---
+        # Check if this is the very first call of the simulation loop
+        if self.Ns[s] == 0:  
+            # Parameters: 0.25 is standard AlphaZero epsilon, 
+            # 0.3 is a common alpha for games with moderate move counts.
+            epsilon = 0.25
+            alpha = 0.3 
+            
+            noise = np.random.dirichlet([alpha] * self.game.game_size)
+            self.Ps[s] = (1 - epsilon) * self.Ps[s] + epsilon * noise
+            
+            # Re-mask and re-normalize after adding noise
+            self.Ps[s] *= self.game.get_allowed_moves(state)
+            self.Ps[s] /= np.sum(self.Ps[s])
 
         # 3. SELECTION (PUCT)
         valids = self.game.get_allowed_moves(state) 

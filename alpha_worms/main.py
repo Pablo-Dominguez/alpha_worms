@@ -31,7 +31,7 @@ class Worms:
 
             canonical_state = game.get_canonical_form(state)
             # Use temp=1 for the first 30 moves, then temp=0.2 to sharpen the policy
-            temp = 1 if turn_count < 30 else 0.2
+            temp = 1 if turn_count < 30 else 0.1
             pi = mcts.get_action_probs(canonical_state, temp=temp)
             
             # Store the DTO temporarily during the game
