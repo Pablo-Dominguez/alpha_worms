@@ -148,6 +148,8 @@ class Worms:
         """
         True AlphaZero IPC Multiprocessing Pipeline.
         """
+
+        os.nice(10)
         if self.nnet is None:
             from alpha_worms.nn import WormsPredictor
             self.nnet = WormsPredictor()
