@@ -30,7 +30,9 @@ class Worms:
             turn_count += 1
 
             canonical_state = game.get_canonical_form(state)
-            pi = mcts.get_action_probs(canonical_state, temp=1)
+            # Use temp=1 for the first 30 moves, then temp=0.2 to sharpen the policy
+            temp = 1 if turn_count < 30 else 0.2
+            pi = mcts.get_action_probs(canonical_state, temp=temp)
             
             # Store the DTO temporarily during the game
             train_examples.append([canonical_state, pi, curr_player])
@@ -51,8 +53,13 @@ class Worms:
 
             # 4. Check for a forced draw if the game drags on too long
             if turn_count >= max_turns and reward == 0:
-                reward = 1 # A tiny, non-zero draw value (or just 0 if your engine handles strict draws)
-                print(f"Game hit turn limit ({max_turns})! Forcing draw.")
+                # Use the point calculation to see who was winning
+                reward = game.get_score_winner(state)
+                
+                # If it's a dead tie on points, use a tiny value to represent a draw
+                if reward == 0:
+                    reward = 1e-5
+                print(f"Game hit turn limit ({max_turns})! Winner by points: {reward}")
 
             if reward != 0:
                 # --- THE FIX: Convert to Tensors and break links ---

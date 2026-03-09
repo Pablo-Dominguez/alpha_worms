@@ -35,19 +35,23 @@ class RawEngine:
         """
         return len(game_dto.board_map.board_pieces) == 0
     
+    def get_score_winner(self, game_dto: GameDTO) -> int:
+        """Calculates who is leading based on piece values."""
+        p1_stack = game_dto.board_map.player01_stack
+        p2_stack = game_dto.board_map.player02_stack
+        
+        # Your existing point logic
+        p1_sum = sum([(p - 21) // 4 for p in p1_stack])
+        p2_sum = sum([(p - 21) // 4 for p in p2_stack])
+        
+        if p1_sum > p2_sum: return 1
+        if p2_sum > p1_sum: return -1
+        return 0
+
     def get_winner(self, game_dto: GameDTO) -> int:
-        """
-        Determine the winner of the game.
-        Returns the player number (1 or 2) if there's a winner, otherwise returns 0 (tie).
-        """
         if self.is_terminal(game_dto):
-            p1_stack = game_dto.board_map.player01_stack
-            p2_stack = game_dto.board_map.player02_stack
-            p1_sum = sum([(piece_number - 21) // 4 for piece_number in p1_stack])
-            p2_sum = sum([(piece_number - 21) // 4 for piece_number in p2_stack])
-            return 1 if p1_sum >= p2_sum else (-1 if p2_sum > p1_sum else 0)
-        else:
-            return 0  # Game is not over yet
+            return self.get_score_winner(game_dto)
+        return 0
     
     def get_total_selected(self, game_dto: GameDTO) -> int:
         """Calculates the total value of selected dices."""
