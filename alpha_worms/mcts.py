@@ -119,21 +119,6 @@ class MCTS:
             self.Vs[s] = current_valids 
             self.Ns[s] = 0
             return v
-        
-        # --- ADDING NOISE AT THE ROOT ---
-        # Check if this is the very first call of the simulation loop
-        if self.Ns[s] == 0:  
-            # Parameters: 0.25 is standard AlphaZero epsilon, 
-            # 0.3 is a common alpha for games with moderate move counts.
-            epsilon = 0.25
-            alpha = 0.3 
-            
-            noise = np.random.dirichlet([alpha] * self.game.game_size)
-            self.Ps[s] = (1 - epsilon) * self.Ps[s] + epsilon * noise
-            
-            # Re-mask and re-normalize after adding noise
-            self.Ps[s] *= self.game.get_allowed_moves(state)
-            self.Ps[s] /= np.sum(self.Ps[s])
 
         # 3. SELECTION (PUCT)
         valids = self.game.get_allowed_moves(state) 
