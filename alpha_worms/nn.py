@@ -109,7 +109,7 @@ class WormsPredictor:
 
         # Prepare state for the network
         state_tensor = torch.FloatTensor(state.astype(np.float32)).to(self.device)
-        state_tensor = state_tensor.view(1, 55, 33) # Add batch dimension
+        state_tensor = state_tensor.unsqueeze(0) # Dynamically add batch dimension
 
         self.nnet.eval() # Set to evaluation mode
         with torch.no_grad():
@@ -117,7 +117,7 @@ class WormsPredictor:
 
         # Convert back to numpy for MCTS to use
         # exp() because the model returns log_softmax
-        return torch.exp(pi).cpu().numpy()[0], v.cpu().numpy()[0][0]
+        return torch.exp(pi).cpu().numpy()[0], v.item()
 
     def train(self, examples):
         """
