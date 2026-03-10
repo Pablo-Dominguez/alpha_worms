@@ -21,7 +21,7 @@ if __name__ == '__main__':
 
     # 2. Define STRESS TEST Hyperparameters for RTX 3050 Ti
     args = {
-        'lr': 0.001,              
+        'lr': 0.001,             # reduce this if plateu of loss function 
         'numMCTSSims': 80,        # Increased: Higher quality moves, still fast on CPU workers
         'cpuct': 1.41,            # Classic AlphaZero constant for exploration
         'num_iterations': 10,    # Run as many as possible in 24h
