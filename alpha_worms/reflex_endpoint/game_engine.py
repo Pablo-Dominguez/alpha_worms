@@ -212,7 +212,7 @@ class GameEngine(RawEngine):
 
         dice_map, board_map = game_dto.dice_map.model_dump(), game_dto.board_map.model_dump()
 
-        total_selected = sum([x if x != 6 else 5 for x in dice_map["selected_dices"]]) if 6 in dice_map["selected_dices"] else 0
+        total_selected = self.get_total_selected(game_dto)
         other_player = 2 if board_map["current_player"] == 1 else 1
 
         ## Get allowed dices
@@ -302,7 +302,7 @@ class GameEngine(RawEngine):
         # Helper to apply your exact transformation logic to a single node
         def _process_node(node_dto: GameDTO) -> GameDTO:
             # 1. SHALLOW COPY: 100x faster, perfectly safe for read-only history
-            new_board = node_dto.board_map.model_copy() 
+            new_board = node_dto.board_map.model_copy(deep=True) 
             
             if swap:
                 new_board.player01_stack, new_board.player02_stack = (
