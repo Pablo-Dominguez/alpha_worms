@@ -398,8 +398,7 @@ class Worms:
             if len(iteration_train_data) > 0:
                 self.save_iteration_data(i, iteration_train_data)
                 self.train_data.extend(iteration_train_data)
-                # Cap the replay buffer to prevent infinite growth and RAM issues
-                self.train_data = self.train_data[-self.args['max_buffer_size']:]
+                # deque already enforces maxlen, so no explicit slice is needed here.
 
             if len(self.train_data) > 0:
                 print(f"Training on {len(self.train_data)} moves...")
