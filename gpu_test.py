@@ -30,7 +30,9 @@ if __name__ == '__main__':
         'max_buffer_size': 50000, # Large buffer to prevent catastrophic forgetting
         'checkpoint': './checkpoints/',
         'train_epochs': 4,        # Spend more time optimizing each batch on GPU
-        # 'arenaCompare': 10,       # Number of games to play for the progress logger
+        'arenaCompare': 20,        # Number of arena games for model validation
+        'arenaThreshold': 0.55,    # Challenger must win at least 55% of arena games
+        'arenaSimMultiplier': 2,   # Arena uses 2x the self-play MCTS sims
     }
 
     # 3. Initialize the Trainer

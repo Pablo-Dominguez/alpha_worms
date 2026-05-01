@@ -9,6 +9,7 @@ import torch.multiprocessing as mp
 import random
 import pickle
 import os
+import shutil
 from datetime import datetime
 
 class Worms:
@@ -144,6 +145,95 @@ class Worms:
                 
         print(f"Successfully loaded {loaded_moves} total moves. Current buffer size: {len(self.train_data)}")
 
+    def get_best_checkpoint_path(self):
+        return os.path.join(self.args['checkpoint'], 'checkpoint_best.pth.tar')
+
+    def save_best_checkpoint(self, source_filename):
+        best_path = self.get_best_checkpoint_path()
+        if not os.path.exists(self.args['checkpoint']):
+            os.makedirs(self.args['checkpoint'], exist_ok=True)
+        shutil.copyfile(os.path.join(self.args['checkpoint'], source_filename), best_path)
+        print(f"Saved best model to {best_path}")
+
+    def play_arena_game(self, mcts_p1, mcts_p2, max_turns=200):
+        state = self.game.get_initial_state()
+        turn_count = 0
+
+        while True:
+            turn_count += 1
+            current_player = state.board_map.current_player
+            canonical_state = self.game.get_canonical_form(state)
+
+            active_mcts = mcts_p1 if current_player == 1 else mcts_p2
+            pi = active_mcts.get_action_probs(canonical_state, temp=0)
+            action = int(np.argmax(pi))
+            state = self.game.get_next_state(state, action)
+
+            winner = self.game.get_winner(state)
+            if winner != 0:
+                return winner
+
+            if turn_count >= max_turns:
+                score_winner = self.game.get_score_winner(state)
+                if score_winner == 0:
+                    return 0
+                return score_winner
+
+    def arena_compare(self, challenger, baseline):
+        arena_games = self.args.get('arenaCompare', 20)
+        arena_threshold = self.args.get('arenaThreshold', 0.55)
+        sim_multiplier = self.args.get('arenaSimMultiplier', 2)
+
+        if arena_games <= 0:
+            print("Arena comparison disabled (arenaCompare <= 0).")
+            return True
+
+        print(f"Starting arena comparison: {arena_games} games, threshold={arena_threshold}, sims={self.args.get('numMCTSSims')}x{sim_multiplier}")
+
+        arena_args = self.args.copy()
+        arena_args['numMCTSSims'] = int(self.args.get('numMCTSSims', 80) * sim_multiplier)
+
+        challenger_wins = 0
+        baseline_wins = 0
+        draws = 0
+
+        for game_idx in range(1, arena_games + 1):
+            if game_idx % 2 == 1:
+                p1_nnet, p2_nnet = challenger, baseline
+                challenger_is_p1 = True
+            else:
+                p1_nnet, p2_nnet = baseline, challenger
+                challenger_is_p1 = False
+
+            mcts_p1 = MCTS(self.game, p1_nnet, arena_args)
+            mcts_p2 = MCTS(self.game, p2_nnet, arena_args)
+            result = self.play_arena_game(mcts_p1, mcts_p2)
+
+            if result == 1:
+                if challenger_is_p1:
+                    challenger_wins += 1
+                else:
+                    baseline_wins += 1
+            elif result == -1:
+                if challenger_is_p1:
+                    baseline_wins += 1
+                else:
+                    challenger_wins += 1
+            else:
+                draws += 1
+
+            print(f"Arena game {game_idx}/{arena_games}: challenger={challenger_wins}, baseline={baseline_wins}, draws={draws}")
+
+        win_rate = challenger_wins / arena_games
+        print(f"Arena results: challenger wins={challenger_wins}, baseline wins={baseline_wins}, draws={draws}, win_rate={win_rate:.3f}")
+
+        if win_rate >= arena_threshold:
+            print(f"Challenger passed the arena threshold ({arena_threshold}).")
+            return True
+
+        print(f"Challenger failed the arena threshold ({arena_threshold}).")
+        return False
+
     def learn(self):
         """
         True AlphaZero IPC Multiprocessing Pipeline.
@@ -158,12 +248,20 @@ class Worms:
         start_iter = self.load_model()
         self.load_history()
 
-        # Offset the loop so if we load checkpoint_5, we start training on iteration 6
         for i in range(start_iter + 1, start_iter + self.args['num_iterations'] + 1):
             print(f"\n--- Iteration {i} ---")
             
+            baseline_predictor = None
+            if self.args.get('arenaCompare', 0) > 0:
+                best_path = self.get_best_checkpoint_path()
+                if os.path.exists(best_path):
+                    baseline_predictor = WormsPredictor()
+                    baseline_predictor.load_checkpoint(folder=self.args['checkpoint'], filename='checkpoint_best.pth.tar')
+                else:
+                    print("No baseline best checkpoint found yet. First candidate will become the baseline automatically.")
+
             num_episodes = self.args['num_episodes']
-            num_workers = min(num_episodes, max(1, mp.cpu_count() - 2)) 
+            num_workers = min(num_episodes, max(1, mp.cpu_count() - 2))
             
             request_queue = mp.Queue()
             parent_pipes, child_pipes = zip(*[mp.Pipe() for _ in range(num_workers)])
@@ -182,7 +280,6 @@ class Worms:
                 p.start()
                 processes.append(p)
 
-            # --- FIXED INDENTATION: This block MUST be inside the for loop ---
             iteration_train_data = []
             active_workers = num_workers
             requests_batch = []
@@ -191,7 +288,7 @@ class Worms:
             
             while active_workers > 0:
                 try:
-                    req = request_queue.get(timeout=0.05) 
+                    req = request_queue.get(timeout=0.05)
                     if req == "DONE":
                         active_workers -= 1
                         continue
@@ -213,24 +310,35 @@ class Worms:
             for p in processes:
                 p.join()
                 
-            # --- FIX 3: CLOSE MULTIPROCESSING RESOURCES ---
             request_queue.close()
-            request_queue.join_thread() # Kill the background buffer thread
+            request_queue.join_thread()
             for p_pipe, c_pipe in zip(parent_pipes, child_pipes):
                 p_pipe.close()
                 c_pipe.close()
-            # --- PERSISTENCE LAYER ---
+
             if len(iteration_train_data) > 0:
                 self.save_iteration_data(i, iteration_train_data)
                 self.train_data.extend(iteration_train_data)
-                # Removed the slice logic here; deque handles sizing automatically!
 
-            # --- TRAINING LAYER ---
             if len(self.train_data) > 0:
                 print(f"Training on {len(self.train_data)} moves...")
                 self.train_network(epochs=self.args.get('train_epochs', 10))
-                
-            self.nnet.save_checkpoint(folder=self.args['checkpoint'], filename=f'checkpoint_{i}.pth.tar')
+
+            checkpoint_name = f'checkpoint_{i}.pth.tar'
+            self.nnet.save_checkpoint(folder=self.args['checkpoint'], filename=checkpoint_name)
+
+            if baseline_predictor is not None:
+                challenger_passed = self.arena_compare(self.nnet, baseline_predictor)
+                if challenger_passed:
+                    self.save_best_checkpoint(checkpoint_name)
+                else:
+                    print("Reloading baseline model after arena rejection.")
+                    best_path = self.get_best_checkpoint_path()
+                    if os.path.exists(best_path):
+                        self.nnet.load_checkpoint(folder=self.args['checkpoint'], filename='checkpoint_best.pth.tar')
+            elif self.args.get('arenaCompare', 0) > 0:
+                # first accepted model becomes the baseline
+                self.save_best_checkpoint(checkpoint_name)
     
     def save_iteration_data(self, iteration, data):
         folder = os.path.join(self.args['checkpoint'], "history")
