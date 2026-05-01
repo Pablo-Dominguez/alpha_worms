@@ -1,8 +1,9 @@
 from alpha_worms.reflex_endpoint.game_engine import GameEngine
 from alpha_worms.nn import WormsPredictor
 from alpha_worms.mcts import MCTS
-# import concurrent.futures
 import numpy as np
+import queue
+import threading
 from collections import deque
 import torch
 import torch.multiprocessing as mp
@@ -148,36 +149,19 @@ class Worms:
     def get_best_checkpoint_path(self):
         return os.path.join(self.args['checkpoint'], 'checkpoint_best.pth.tar')
 
-    def save_best_checkpoint(self, source_filename):
+    def save_best_checkpoint(self, source_filename, iteration):
         best_path = self.get_best_checkpoint_path()
         if not os.path.exists(self.args['checkpoint']):
             os.makedirs(self.args['checkpoint'], exist_ok=True)
         shutil.copyfile(os.path.join(self.args['checkpoint'], source_filename), best_path)
-        print(f"Saved best model to {best_path}")
+        # Save the iteration number for resume
+        with open(os.path.join(self.args['checkpoint'], 'best_iteration.txt'), 'w') as f:
+            f.write(str(iteration))
+        print(f"Saved best model to {best_path} (iteration {iteration})")
 
     def play_arena_game(self, mcts_p1, mcts_p2, max_turns=200):
-        state = self.game.get_initial_state()
-        turn_count = 0
-
-        while True:
-            turn_count += 1
-            current_player = state.board_map.current_player
-            canonical_state = self.game.get_canonical_form(state)
-
-            active_mcts = mcts_p1 if current_player == 1 else mcts_p2
-            pi = active_mcts.get_action_probs(canonical_state, temp=0)
-            action = int(np.argmax(pi))
-            state = self.game.get_next_state(state, action)
-
-            winner = self.game.get_winner(state)
-            if winner != 0:
-                return winner
-
-            if turn_count >= max_turns:
-                score_winner = self.game.get_score_winner(state)
-                if score_winner == 0:
-                    return 0
-                return score_winner
+        # This method is now unused since we use multi-threaded play_single_arena_game
+        pass
 
     def arena_compare(self, challenger, baseline):
         arena_games = self.args.get('arenaCompare', 20)
@@ -193,38 +177,33 @@ class Worms:
         arena_args = self.args.copy()
         arena_args['numMCTSSims'] = int(self.args.get('numMCTSSims', 80) * sim_multiplier)
 
-        challenger_wins = 0
-        baseline_wins = 0
-        draws = 0
+        # Dual-model batching setup for arena
+        arena_queue = queue.Queue()
+        batching_thread = threading.Thread(target=self.batch_arena_requests, args=(arena_queue, challenger, baseline), daemon=True)
+        batching_thread.start()
 
-        for game_idx in range(1, arena_games + 1):
-            if game_idx % 2 == 1:
-                p1_nnet, p2_nnet = challenger, baseline
-                challenger_is_p1 = True
-            else:
-                p1_nnet, p2_nnet = baseline, challenger
-                challenger_is_p1 = False
+        # Multi-threaded arena evaluation using ThreadPoolExecutor
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+        num_workers = min(arena_games, 4)  # Limit to 4 threads to avoid GPU overload
+        
+        results = []
+        with ThreadPoolExecutor(max_workers=num_workers) as executor:
+            futures = [
+                executor.submit(self.play_single_arena_game, challenger, baseline, arena_args, arena_queue, game_idx % 2 == 0)
+                for game_idx in range(arena_games)
+            ]
+            for future in as_completed(futures):
+                results.append(future.result())
 
-            mcts_p1 = MCTS(self.game, p1_nnet, arena_args)
-            mcts_p2 = MCTS(self.game, p2_nnet, arena_args)
-            result = self.play_arena_game(mcts_p1, mcts_p2)
+        # Stop the batching thread after all arena games have completed
+        arena_queue.put("STOP")
+        batching_thread.join(timeout=1.0)
 
-            if result == 1:
-                if challenger_is_p1:
-                    challenger_wins += 1
-                else:
-                    baseline_wins += 1
-            elif result == -1:
-                if challenger_is_p1:
-                    baseline_wins += 1
-                else:
-                    challenger_wins += 1
-            else:
-                draws += 1
+        challenger_wins = sum(1 for r in results if r == 1)
+        baseline_wins = sum(1 for r in results if r == -1)
+        draws = sum(1 for r in results if r == 0)
 
-            print(f"Arena game {game_idx}/{arena_games}: challenger={challenger_wins}, baseline={baseline_wins}, draws={draws}")
-
-        win_rate = challenger_wins / arena_games
+        win_rate = challenger_wins / arena_games if arena_games > 0 else 0
         print(f"Arena results: challenger wins={challenger_wins}, baseline wins={baseline_wins}, draws={draws}, win_rate={win_rate:.3f}")
 
         if win_rate >= arena_threshold:
@@ -233,6 +212,90 @@ class Worms:
 
         print(f"Challenger failed the arena threshold ({arena_threshold}).")
         return False
+
+    def batch_arena_requests(self, arena_queue, challenger, baseline):
+        """
+        Batches inference requests for both challenger and baseline models to optimize GPU usage.
+        """
+        batch_size = 16
+        while True:
+            requests = []
+            try:
+                while len(requests) < batch_size:
+                    req = arena_queue.get(timeout=0.01)
+                    if req == "STOP":
+                        return
+                    requests.append(req)
+            except queue.Empty:
+                continue
+
+            if requests:
+                # Group requests by model
+                challenger_reqs = [(i, r) for i, r in enumerate(requests) if r[0] is challenger]
+                baseline_reqs = [(i, r) for i, r in enumerate(requests) if r[0] is baseline]
+
+                # Process challenger batch
+                if challenger_reqs:
+                    states = [r[1] for _, r in challenger_reqs]
+                    policies, values = challenger.predict_batch(states)
+                    for idx, (orig_idx, _) in enumerate(challenger_reqs):
+                        requests[orig_idx][3]['pi'] = policies[idx]
+                        requests[orig_idx][3]['v'] = values[idx]
+                        requests[orig_idx][2].set()
+
+                # Process baseline batch
+                if baseline_reqs:
+                    states = [r[1] for _, r in baseline_reqs]
+                    policies, values = baseline.predict_batch(states)
+                    for idx, (orig_idx, _) in enumerate(baseline_reqs):
+                        requests[orig_idx][3]['pi'] = policies[idx]
+                        requests[orig_idx][3]['v'] = values[idx]
+                        requests[orig_idx][2].set()
+
+    def play_single_arena_game(self, challenger, baseline, arena_args, arena_queue, challenger_goes_second):
+        """
+        Play a single arena game between challenger and baseline.
+        Returns 1 if challenger wins, -1 if baseline wins, 0 for draw.
+        """
+        if challenger_goes_second:
+            p1_nnet, p2_nnet = baseline, challenger
+        else:
+            p1_nnet, p2_nnet = challenger, baseline
+
+        # Use proxies for batched inference
+        p1_proxy = ArenaPredictorProxy(p1_nnet, arena_queue)
+        p2_proxy = ArenaPredictorProxy(p2_nnet, arena_queue)
+
+        mcts_p1 = MCTS(self.game, p1_proxy, arena_args)
+        mcts_p2 = MCTS(self.game, p2_proxy, arena_args)
+        
+        state = self.game.get_initial_state()
+        turn_count = 0
+        max_turns = 200
+
+        while True:
+            turn_count += 1
+            current_player = state.board_map.current_player
+            canonical_state = self.game.get_canonical_form(state)
+
+            active_mcts = mcts_p1 if current_player == 1 else mcts_p2
+            pi = active_mcts.get_action_probs(canonical_state, temp=0)
+            action = int(np.argmax(pi))
+            state = self.game.get_next_state(state, action)
+
+            winner = self.game.get_winner(state)
+            if winner != 0:
+                if challenger_goes_second:
+                    return -winner  # Invert because challenger is P2
+                return winner
+
+            if turn_count >= max_turns:
+                score_winner = self.game.get_score_winner(state)
+                if score_winner == 0:
+                    return 0
+                if challenger_goes_second:
+                    return -score_winner
+                return score_winner
 
     def learn(self):
         """
@@ -247,6 +310,18 @@ class Worms:
         # --- NEW: LOAD PREVIOUS STATE ---
         start_iter = self.load_model()
         self.load_history()
+
+        # If a best checkpoint exists (from previous arena evaluations), load it instead of the latest
+        best_path = self.get_best_checkpoint_path()
+        if os.path.exists(best_path):
+            self.nnet.load_checkpoint(folder=self.args['checkpoint'], filename='checkpoint_best.pth.tar')
+            best_iter_file = os.path.join(self.args['checkpoint'], 'best_iteration.txt')
+            if os.path.exists(best_iter_file):
+                with open(best_iter_file, 'r') as f:
+                    start_iter = int(f.read().strip())
+                print(f"Resumed from best model at iteration {start_iter}.")
+            else:
+                print("Warning: Best model loaded but iteration file missing. Using latest iteration.")
 
         for i in range(start_iter + 1, start_iter + self.args['num_iterations'] + 1):
             print(f"\n--- Iteration {i} ---")
@@ -310,8 +385,12 @@ class Worms:
             for p in processes:
                 p.join()
                 
+            # Enhanced worker process cleanup to prevent zombie processes
             request_queue.close()
-            request_queue.join_thread()
+            if hasattr(request_queue, 'cancel_join_thread'):
+                request_queue.cancel_join_thread()
+            else:
+                request_queue.join_thread()
             for p_pipe, c_pipe in zip(parent_pipes, child_pipes):
                 p_pipe.close()
                 c_pipe.close()
@@ -319,6 +398,8 @@ class Worms:
             if len(iteration_train_data) > 0:
                 self.save_iteration_data(i, iteration_train_data)
                 self.train_data.extend(iteration_train_data)
+                # Cap the replay buffer to prevent infinite growth and RAM issues
+                self.train_data = self.train_data[-self.args['max_buffer_size']:]
 
             if len(self.train_data) > 0:
                 print(f"Training on {len(self.train_data)} moves...")
@@ -330,15 +411,19 @@ class Worms:
             if baseline_predictor is not None:
                 challenger_passed = self.arena_compare(self.nnet, baseline_predictor)
                 if challenger_passed:
-                    self.save_best_checkpoint(checkpoint_name)
+                    self.save_best_checkpoint(checkpoint_name, i)
                 else:
                     print("Reloading baseline model after arena rejection.")
                     best_path = self.get_best_checkpoint_path()
                     if os.path.exists(best_path):
                         self.nnet.load_checkpoint(folder=self.args['checkpoint'], filename='checkpoint_best.pth.tar')
+                # VRAM optimization: Move baseline to CPU and delete to free GPU memory
+                if hasattr(baseline_predictor, 'nnet'):
+                    baseline_predictor.nnet.to('cpu')
+                del baseline_predictor
             elif self.args.get('arenaCompare', 0) > 0:
                 # first accepted model becomes the baseline
-                self.save_best_checkpoint(checkpoint_name)
+                self.save_best_checkpoint(checkpoint_name, i)
     
     def save_iteration_data(self, iteration, data):
         folder = os.path.join(self.args['checkpoint'], "history")
@@ -406,6 +491,22 @@ class Worms:
         # 4. Tell the Chef this worker is clocking out
         request_queue.put("DONE")
         
+class ArenaPredictorProxy:
+    """
+    A proxy for arena models that batches inference requests to reduce GPU contention.
+    """
+    def __init__(self, model, arena_queue):
+        self.model = model
+        self.arena_queue = arena_queue
+
+    def predict(self, state):
+        event = threading.Event()
+        result = {}
+        self.arena_queue.put((self.model, state, event, result))
+        event.wait()
+        return result['pi'], result['v']
+
+
 class IPCPredictorProxy:
     """
     A fake neural network that simply forwards requests to the GPU Chef 
