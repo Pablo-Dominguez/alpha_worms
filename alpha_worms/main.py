@@ -12,6 +12,20 @@ import pickle
 import os
 import shutil
 from datetime import datetime
+import gc
+import logging
+import sys
+
+# FIX 2: Set spawn method at module entry to prevent CUDA/fork deadlocks on WSL2/Linux
+if __name__ == '__main__':
+    mp.set_start_method('spawn', force=True)
+
+# Configure logging for worker heartbeat
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
 
 class Worms:
     def __init__(self, game: GameEngine, nnet: WormsPredictor, args):
@@ -149,6 +163,23 @@ class Worms:
     def get_best_checkpoint_path(self):
         return os.path.join(self.args['checkpoint'], 'checkpoint_best.pth.tar')
 
+    def check_gpu_memory_usage(self):
+        """
+        FIX 4: Helper to check GPU memory usage percentage.
+        Returns percentage (0-100) or None if CUDA not available.
+        """
+        if not torch.cuda.is_available():
+            return None
+        try:
+            reserved = torch.cuda.memory_reserved(0)
+            allocated = torch.cuda.memory_allocated(0)
+            total = torch.cuda.get_device_properties(0).total_memory
+            usage_pct = (allocated / total) * 100
+            return usage_pct
+        except Exception as e:
+            logger.warning(f"Could not check GPU memory: {e}")
+            return None
+
     def save_best_checkpoint(self, source_filename, iteration):
         best_path = self.get_best_checkpoint_path()
         if not os.path.exists(self.args['checkpoint']):
@@ -173,6 +204,15 @@ class Worms:
             return True
 
         print(f"Starting arena comparison: {arena_games} games, threshold={arena_threshold}, sims={self.args.get('numMCTSSims')}x{sim_multiplier}")
+        
+        # FIX 4: Check GPU memory usage and optionally move baseline to CPU
+        gpu_usage = self.check_gpu_memory_usage()
+        if gpu_usage is not None:
+            logger.info(f"GPU memory usage before arena: {gpu_usage:.1f}%")
+            if gpu_usage > 80:
+                logger.warning(f"GPU usage {gpu_usage:.1f}% > 80%. Moving baseline to CPU for arena.")
+                if hasattr(baseline, 'nnet'):
+                    baseline.nnet.to('cpu')
 
         arena_args = self.args.copy()
         arena_args['numMCTSSims'] = int(self.args.get('numMCTSSims', 80) * sim_multiplier)
@@ -358,32 +398,60 @@ class Worms:
             iteration_train_data = []
             active_workers = num_workers
             requests_batch = []
+            worker_timeout = 60  # FIX 1: 60-second timeout for worker requests
+            last_activity_time = datetime.now()
+            import time
             
-            print(f"Started {num_workers} CPU workers. GPU Batching server listening...")
+            logger.info(f"Started {num_workers} CPU workers. GPU Batching server listening...")
             
             while active_workers > 0:
                 try:
-                    req = request_queue.get(timeout=0.05)
+                    req = request_queue.get(timeout=worker_timeout)  # FIX 1: Timeout prevents indefinite blocking
+                    last_activity_time = datetime.now()
+                    
                     if req == "DONE":
                         active_workers -= 1
+                        logger.info(f"Worker signaled completion. {active_workers} workers remaining.")
                         continue
                     elif req[0] == "DATA":
                         iteration_train_data.extend(req[1])
+                        logger.info(f"Received {len(req[1])} training examples from worker.")
                         continue
                     requests_batch.append(req)
-                except Exception:
+                except queue.Empty:
+                    # FIX 1: Timeout hit - check if any workers are stuck
+                    time_elapsed = (datetime.now() - last_activity_time).total_seconds()
+                    logger.warning(f"No worker activity for {time_elapsed}s. Active workers: {active_workers}")
+                    
+                    if time_elapsed > worker_timeout + 10:
+                        logger.critical(f"Silent deadlock detected! Terminating {len(processes)} worker processes.")
+                        for p in processes:
+                            if p.is_alive():
+                                p.terminate()
+                                p.join(timeout=5)
+                                if p.is_alive():
+                                    p.kill()
+                        raise RuntimeError("Silent deadlock detected: workers hung for >70s")
+                    continue
+                except Exception as e:
+                    logger.error(f"Error receiving from queue: {e}")
                     pass
                 
                 if len(requests_batch) >= self.args['batch_size'] or (len(requests_batch) > 0 and request_queue.empty()):
                     worker_ids = [r[0] for r in requests_batch]
                     states = [r[1] for r in requests_batch]
+                    logger.debug(f"Processing GPU batch with {len(requests_batch)} requests")
                     policies, values = self.nnet.predict_batch(states)
                     for idx, w_id in enumerate(worker_ids):
                         parent_pipes[w_id].send((policies[idx], values[idx]))
                     requests_batch = []
 
             for p in processes:
-                p.join()
+                if p.is_alive():
+                    p.join(timeout=5)
+                if p.is_alive():
+                    logger.warning(f"Process {p.pid} did not terminate cleanly. Killing...")
+                    p.kill()
                 
             # Enhanced worker process cleanup to prevent zombie processes
             request_queue.close()
@@ -403,6 +471,21 @@ class Worms:
             if len(self.train_data) > 0:
                 print(f"Training on {len(self.train_data)} moves...")
                 self.train_network(epochs=self.args.get('train_epochs', 10))
+            
+            # FIX 3: Replay Buffer Capping & Garbage Collection
+            logger.info(f"Current train_data buffer size: {len(self.train_data)}")
+            max_buffer_size = self.args.get('max_buffer_size', 50000)
+            if len(self.train_data) > max_buffer_size:
+                # Trim buffer to maximum size (deque maxlen should handle this, but explicit check)
+                while len(self.train_data) > max_buffer_size:
+                    self.train_data.popleft()
+                logger.info(f"Trimmed buffer to {len(self.train_data)} examples")
+            
+            # Explicitly call garbage collection and CUDA cache clearing
+            gc.collect()
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+                logger.info("CUDA cache cleared")
 
             checkpoint_name = f'checkpoint_{i}.pth.tar'
             self.nnet.save_checkpoint(folder=self.args['checkpoint'], filename=checkpoint_name)
@@ -416,10 +499,14 @@ class Worms:
                     best_path = self.get_best_checkpoint_path()
                     if os.path.exists(best_path):
                         self.nnet.load_checkpoint(folder=self.args['checkpoint'], filename='checkpoint_best.pth.tar')
-                # VRAM optimization: Move baseline to CPU and delete to free GPU memory
+                # FIX 4: Arena Resource Management - Move baseline to CPU and free GPU memory
                 if hasattr(baseline_predictor, 'nnet'):
                     baseline_predictor.nnet.to('cpu')
+                    logger.info("Baseline model moved to CPU for memory efficiency")
                 del baseline_predictor
+                gc.collect()
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
             elif self.args.get('arenaCompare', 0) > 0:
                 # first accepted model becomes the baseline
                 self.save_best_checkpoint(checkpoint_name, i)
@@ -460,7 +547,10 @@ class Worms:
     def worker_play_games(worker_id, num_games, request_queue, worker_pipe, args, game):
         """
         The isolated process that runs the games and MCTS on a single CPU core.
+        FIX 3: Added timeout to pipe.recv() to detect parent crash.
+        FIX 5: Added heartbeat logging every 5 games.
         """
+        import time
         # 1. Create the fake predictor
         proxy_nnet = IPCPredictorProxy(worker_id, request_queue, worker_pipe)
 
@@ -470,23 +560,36 @@ class Worms:
         
         worker_train_data = []
         
-        for game_num in range(1, num_games + 1):
-            # 2. Initialize a fresh MCTS for this game using the PROXY
-            mcts = MCTS(game, proxy_nnet, args)
+        try:
+            for game_num in range(1, num_games + 1):
+                # 2. Initialize a fresh MCTS for this game using the PROXY
+                mcts = MCTS(game, proxy_nnet, args)
+                
+                # NOTE: You will need to ensure your self.execute_episode() 
+                # uses this specific 'mcts' instance! 
+                # Example: game_history = self.execute_episode(mcts)
+                game_history = Worms.execute_episode(game, mcts=mcts,tensor_engine=local_tensor_engine)
+                
+                worker_train_data.extend(game_history)
+                
+                # FIX 5: Heartbeat logging every 5 games
+                if game_num % 5 == 0:
+                    logger.info(f"Worker {worker_id} progress: {game_num}/{num_games} games, {len(worker_train_data)} examples")
+                else:
+                    print(f"Worker {worker_id} completed game {game_num}/{num_games}")
+                
+            # 3. Game over! Send the training data to the Chef
+            request_queue.put(("DATA", worker_train_data))
+            logger.info(f"Worker {worker_id} finished: sent {len(worker_train_data)} training examples")
             
-            # NOTE: You will need to ensure your self.execute_episode() 
-            # uses this specific 'mcts' instance! 
-            # Example: game_history = self.execute_episode(mcts)
-            game_history = Worms.execute_episode(game, mcts=mcts,tensor_engine=local_tensor_engine)
-            
-            worker_train_data.extend(game_history)
-            print(f"Worker {worker_id} completed game {game_num}/{num_games}")
-            
-        # 3. Game over! Send the training data to the Chef
-        request_queue.put(("DATA", worker_train_data))
+        except Exception as e:
+            logger.error(f"Worker {worker_id} crashed with error: {e}")
+            request_queue.put(("DATA", worker_train_data))
         
         # --- FIX 4: FREE WORKER MEMORY IMMEDIATELY ---
         worker_train_data = []
+        gc.collect()  # Explicitly free memory
+        
         # 4. Tell the Chef this worker is clocking out
         request_queue.put("DONE")
         
@@ -510,11 +613,13 @@ class IPCPredictorProxy:
     """
     A fake neural network that simply forwards requests to the GPU Chef 
     and waits for the answer.
+    FIX 1: Added timeout to pipe.recv() to prevent indefinite blocking.
     """
     def __init__(self, worker_id, request_queue, worker_pipe):
         self.worker_id = worker_id
         self.request_queue = request_queue
         self.worker_pipe = worker_pipe
+        self.pipe_timeout = 60  # FIX 1: 60-second timeout for pipe communication
 
         from alpha_worms.reflex_endpoint.tensor_engine import TensorEngine
         self.tensor_engine = TensorEngine()
@@ -532,5 +637,14 @@ class IPCPredictorProxy:
         # 2. Send the raw data, not the DTO
         self.request_queue.put((self.worker_id, safe_tensor))
         
-        policy, value = self.worker_pipe.recv() 
-        return policy, value
+        # FIX 1: Use timeout to detect if parent process crashed
+        try:
+            if self.worker_pipe.poll(self.pipe_timeout):
+                policy, value = self.worker_pipe.recv()
+                return policy, value
+            else:
+                logger.error(f"Worker {self.worker_id}: Parent process not responding for {self.pipe_timeout}s. Timeout.")
+                raise TimeoutError(f"Pipe communication timeout after {self.pipe_timeout}s")
+        except Exception as e:
+            logger.error(f"Worker {self.worker_id}: Pipe error: {e}")
+            raise
