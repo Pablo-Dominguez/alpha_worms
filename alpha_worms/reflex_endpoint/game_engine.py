@@ -75,7 +75,7 @@ class RawEngine:
                                  selected_dices=selected_dices,
                                  grey_out_dices = 0) # Reset dices for next turn
         
-        return GameDTO(dice_map=new_dices_model, board_map=old_pieces_version, previous_dto=game_dto)
+        return GameDTO(dice_map=new_dices_model, board_map=old_pieces_version, previous_dto=None)
 
     def fetch_from_board(self, game_dto: GameDTO, piece_number: int):
         """
@@ -106,7 +106,7 @@ class RawEngine:
                 winner = self.get_winner(game_dto)
                 print(f"Player {winner} wins! Game over.")
             
-            return self.end_turn(GameDTO(dice_map=old_dice_model, board_map=new_pieces_version, previous_dto=game_dto))
+            return self.end_turn(GameDTO(dice_map=old_dice_model, board_map=new_pieces_version, previous_dto=None))
         
     def fetch_from_stack(self, game_dto: GameDTO,piece_number: int):
         """Moves a piece between a player's stack and the board."""
@@ -130,7 +130,7 @@ class RawEngine:
             # raise("Piece not in players stacks.")
             pass
         
-        return self.end_turn(GameDTO(dice_map=old_dice_model, board_map=old_pieces_version, previous_dto=game_dto))
+        return self.end_turn(GameDTO(dice_map=old_dice_model, board_map=old_pieces_version, previous_dto=None))
     
     def grey_out_dices(self, dice_model: Dices, reset: bool = False):
         """Greys out all available dices, preventing further selection."""
@@ -158,10 +158,10 @@ class RawEngine:
             available_pieces = [] if not 6 in new_dice_model.selected_dices else available_pieces
 
             if not available_pieces:
-                return self.throw_dices(GameDTO(dice_map=new_dice_model, board_map=game_dto.board_map, previous_dto=game_dto))
+                return self.throw_dices(GameDTO(dice_map=new_dice_model, board_map=game_dto.board_map, previous_dto=None))
             else:
                 new_dice_model = self.grey_out_dices(new_dice_model)
-        return GameDTO(dice_map=new_dice_model, board_map=game_dto.board_map, previous_dto=game_dto)
+        return GameDTO(dice_map=new_dice_model, board_map=game_dto.board_map, previous_dto=None)
 
     def throw_dices(self, game_dto: GameDTO):
         """Simulates throwing the dices and updates their values."""
@@ -186,11 +186,11 @@ class RawEngine:
             player_stack = new_pieces_version.player01_stack if new_pieces_version.current_player ==1 else new_pieces_version.player02_stack
             if player_stack:
                 piece_to_drop = player_stack[-1]
-                return self.fetch_from_stack(GameDTO(dice_map=new_dices_version, board_map=new_pieces_version, previous_dto=game_dto), piece_to_drop)
+                return self.fetch_from_stack(GameDTO(dice_map=new_dices_version, board_map=new_pieces_version, previous_dto=None), piece_to_drop)
             else:
-                return self.end_turn(GameDTO(dice_map=new_dices_version, board_map=new_pieces_version, previous_dto=game_dto))
+                return self.end_turn(GameDTO(dice_map=new_dices_version, board_map=new_pieces_version, previous_dto=None))
         else:
-            return GameDTO(dice_map=new_dices_version, board_map=new_pieces_version, previous_dto=game_dto)
+            return GameDTO(dice_map=new_dices_version, board_map=new_pieces_version, previous_dto=None)
 
 
     
@@ -248,16 +248,16 @@ class GameEngine(RawEngine):
                 # Fetch from board
                 piece_number = action + 21  # Adjusting index to match piece numbering
                 if piece_number in game_dto.board_map.board_pieces:
-                    return RawEngine().fetch_from_board(GameDTO(dice_map=game_dto.dice_map, board_map=game_dto.board_map, previous_dto=game_dto), piece_number)
+                    return RawEngine().fetch_from_board(GameDTO(dice_map=game_dto.dice_map, board_map=game_dto.board_map, previous_dto=None), piece_number)
                 else:
-                    return RawEngine().fetch_from_stack(GameDTO(dice_map=game_dto.dice_map, board_map=game_dto.board_map, previous_dto=game_dto), piece_number)
+                    return RawEngine().fetch_from_stack(GameDTO(dice_map=game_dto.dice_map, board_map=game_dto.board_map, previous_dto=None), piece_number)
             elif action < 24:
                 # Select dice
                 dice_number = action - 16  # Adjusting index to match dice numbering
-                return RawEngine().select_dice(GameDTO(dice_map=game_dto.dice_map, board_map=game_dto.board_map, previous_dto=game_dto), dice_number)
+                return RawEngine().select_dice(GameDTO(dice_map=game_dto.dice_map, board_map=game_dto.board_map, previous_dto=None), dice_number)
             else:
                 # Roll again
-                return RawEngine().throw_dices(GameDTO(dice_map=game_dto.dice_map, board_map=game_dto.board_map, previous_dto=game_dto))
+                return RawEngine().throw_dices(GameDTO(dice_map=game_dto.dice_map, board_map=game_dto.board_map, previous_dto=None))
             
     def get_canonical_form(self, game_dto: GameDTO) -> GameDTO:
         """
@@ -282,11 +282,7 @@ class GameEngine(RawEngine):
         canonical_dto = GameDTO(dice_map=new_dice_map, board_map=new_board_map)
 
         # 3. RECURSIVE STEP: Handle the history
-        # If there's a previous move, canonicalize it too based on the SAME perspective
-        if game_dto.previous_dto:
-            # We pass the history through a helper that swaps based on the 
-            # ORIGINAL player's perspective to keep the whole timeline consistent.
-            canonical_dto.previous_dto = self._get_canonical_history(game_dto.previous_dto, swap=should_swap)
+        # Removed to prevent memory chains: canonical_dto.previous_dto = self._get_canonical_history(game_dto.previous_dto, swap=should_swap)
 
         return canonical_dto
 
