@@ -238,11 +238,18 @@ class WormsPredictor:
 
     def predict_batch(self, state_arrays):
         """
-        Chef now receives a list of pre-processed NumPy arrays.
+        Receives a list of GameDTO or numpy arrays.
         """
+        encoded_states = []
+        for state in state_arrays:
+            if isinstance(state, np.ndarray):
+                encoded_states.append(state)
+            else:
+                # Assume it's a GameDTO
+                encoded_states.append(self.tensor_engine.to_temporal_tensor(state))
+        
         # 1. Fast conversion from list of arrays to a single Torch Tensor
-        # We use torch.as_tensor because it's faster than torch.tensor (shares memory if possible)
-        batch_tensor = torch.as_tensor(np.array(state_arrays), device=self.device, dtype=torch.float32)
+        batch_tensor = torch.as_tensor(np.array(encoded_states), device=self.device, dtype=torch.float32)
         
         # 2. Standard GPU Inference
         self.nnet.eval()

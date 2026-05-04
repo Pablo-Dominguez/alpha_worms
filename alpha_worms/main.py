@@ -205,14 +205,13 @@ class Worms:
 
         print(f"Starting arena comparison: {arena_games} games, threshold={arena_threshold}, sims={self.args.get('numMCTSSims')}x{sim_multiplier}")
         
-        # FIX 4: Check GPU memory usage and optionally move baseline to CPU
+        # FIX 4: Check GPU memory usage and move baseline to CPU for arena
         gpu_usage = self.check_gpu_memory_usage()
         if gpu_usage is not None:
             logger.info(f"GPU memory usage before arena: {gpu_usage:.1f}%")
-            if gpu_usage > 80:
-                logger.warning(f"GPU usage {gpu_usage:.1f}% > 80%. Moving baseline to CPU for arena.")
-                if hasattr(baseline, 'nnet'):
-                    baseline.nnet.to('cpu')
+        if hasattr(baseline, 'nnet'):
+            baseline.nnet.to('cpu')
+            logger.info("Moved baseline model to CPU for arena to save GPU memory.")
 
         arena_args = self.args.copy()
         arena_args['numMCTSSims'] = int(self.args.get('numMCTSSims', 80) * sim_multiplier)
@@ -257,7 +256,7 @@ class Worms:
         """
         Batches inference requests for both challenger and baseline models to optimize GPU usage.
         """
-        batch_size = 16
+        batch_size = 8  # Reduced to save memory
         while True:
             requests = []
             try:
@@ -291,6 +290,10 @@ class Worms:
                         requests[orig_idx][3]['pi'] = policies[idx]
                         requests[orig_idx][3]['v'] = values[idx]
                         requests[orig_idx][2].set()
+
+                # Clear memory
+                del requests
+                gc.collect()
 
     def play_single_arena_game(self, challenger, baseline, arena_args, arena_queue, challenger_goes_second):
         """
@@ -485,7 +488,7 @@ class Worms:
             gc.collect()
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
-                logger.info("CUDA cache cleared")
+            logger.info("CUDA cache cleared")
 
             checkpoint_name = f'checkpoint_{i}.pth.tar'
             self.nnet.save_checkpoint(folder=self.args['checkpoint'], filename=checkpoint_name)
@@ -602,9 +605,12 @@ class ArenaPredictorProxy:
         self.arena_queue = arena_queue
 
     def predict(self, state):
+        # Convert DTO to numpy array immediately to save memory
+        raw_tensor = self.model.tensor_engine.to_temporal_tensor(state)
+        safe_tensor = np.array(raw_tensor, copy=True, dtype=np.float32)
         event = threading.Event()
         result = {}
-        self.arena_queue.put((self.model, state, event, result))
+        self.arena_queue.put((self.model, safe_tensor, event, result))
         event.wait()
         return result['pi'], result['v']
 
