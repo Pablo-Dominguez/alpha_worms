@@ -248,16 +248,16 @@ class GameEngine(RawEngine):
                 # Fetch from board
                 piece_number = action + 21  # Adjusting index to match piece numbering
                 if piece_number in game_dto.board_map.board_pieces:
-                    return RawEngine().fetch_from_board(GameDTO(dice_map=game_dto.dice_map, board_map=game_dto.board_map, previous_dto=None), piece_number)
+                    return self.fetch_from_board(GameDTO(dice_map=game_dto.dice_map, board_map=game_dto.board_map, previous_dto=None), piece_number)
                 else:
-                    return RawEngine().fetch_from_stack(GameDTO(dice_map=game_dto.dice_map, board_map=game_dto.board_map, previous_dto=None), piece_number)
+                    return self.fetch_from_stack(GameDTO(dice_map=game_dto.dice_map, board_map=game_dto.board_map, previous_dto=None), piece_number)
             elif action < 24:
                 # Select dice
                 dice_number = action - 16  # Adjusting index to match dice numbering
-                return RawEngine().select_dice(GameDTO(dice_map=game_dto.dice_map, board_map=game_dto.board_map, previous_dto=None), dice_number)
+                return self.select_dice(GameDTO(dice_map=game_dto.dice_map, board_map=game_dto.board_map, previous_dto=None), dice_number)
             else:
                 # Roll again
-                return RawEngine().throw_dices(GameDTO(dice_map=game_dto.dice_map, board_map=game_dto.board_map, previous_dto=None))
+                return self.throw_dices(GameDTO(dice_map=game_dto.dice_map, board_map=game_dto.board_map, previous_dto=None))
             
     def get_canonical_form(self, game_dto: GameDTO) -> GameDTO:
         """
@@ -282,7 +282,8 @@ class GameEngine(RawEngine):
         canonical_dto = GameDTO(dice_map=new_dice_map, board_map=new_board_map)
 
         # 3. RECURSIVE STEP: Handle the history
-        # Removed to prevent memory chains: canonical_dto.previous_dto = self._get_canonical_history(game_dto.previous_dto, swap=should_swap)
+        # Removed to prevent memory chains: 
+        canonical_dto.previous_dto = self._get_canonical_history(game_dto.previous_dto, swap=should_swap)
 
         return canonical_dto
 

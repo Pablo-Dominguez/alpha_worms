@@ -10,8 +10,8 @@ from PIL import Image, ImageDraw
 
 class TensorEngine:
     def __init__(self):
-        
-        pass
+        self._game_engine = GameEngine()  # ← create once
+
 
     def to_tensor(self, game_dto: GameDTO):
         # Initialize the tensor: 33 slots, 55 feature layers
@@ -48,7 +48,7 @@ class TensorEngine:
         tensor[54, :] = game_dto.board_map.current_player - 1
         # Game history features can be added here as needed 
 
-        available_pieces = GameEngine().get_allowed_moves(game_dto)[:16]
+        available_pieces = self._game_engine.get_allowed_moves(game_dto)[:16]
         # --- POPULATE PIECE FEATURES ---
         for piece_number in range(21, 37):
             # 1. Piece locations
@@ -86,23 +86,19 @@ class TensorEngine:
         # Now we have [Current, Prev, Prev-Prev...]
         # We call your existing to_tensor for each one
         layers = []
+        current_tensor_cache = None
         for i in range(T):
             if i < len(history):
-                # Use your original method
                 single_tensor = self.to_tensor(history[i])
-                # Strip the turn indicator (last layer) to keep it as a board-state only
+                if i == 0:
+                    current_tensor_cache = single_tensor
                 layers.append(single_tensor[:54, :])
             else:
-                # Padding for the start of the game
                 layers.append(np.zeros((54, 33), dtype=np.float32))
-                
-        # Combine history: (54 * T, 33)
+
         history_stack = np.concatenate(layers, axis=0)
-        
-        # Add the current turn indicator as the final layer
-        current_turn = self.to_tensor(current_dto)[54:55, :]
-        
-        return np.concatenate([history_stack, current_turn], axis=0) 
+        current_turn = current_tensor_cache[54:55, :]  # reuse, no second call
+        return np.concatenate([history_stack, current_turn], axis=0)
 
     def to_pillow_heatmap(self, tensor):
 

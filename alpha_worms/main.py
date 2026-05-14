@@ -266,7 +266,7 @@ class Worms:
                         return
                     requests.append(req)
             except queue.Empty:
-                continue
+                pass
 
             if requests:
                 # Group requests by model
@@ -293,7 +293,7 @@ class Worms:
 
                 # Clear memory
                 del requests
-                gc.collect()
+                # gc.collect()
 
     def play_single_arena_game(self, challenger, baseline, arena_args, arena_queue, challenger_goes_second):
         """
@@ -374,7 +374,8 @@ class Worms:
                 best_path = self.get_best_checkpoint_path()
                 if os.path.exists(best_path):
                     baseline_predictor = WormsPredictor()
-                    baseline_predictor.load_checkpoint(folder=self.args['checkpoint'], filename='checkpoint_best.pth.tar')
+                    baseline_predictor.load_checkpoint(folder=self.args['checkpoint'], filename='checkpoint_best.pth.tar', load_optimizer=False)
+                    baseline_predictor.nnet.to('cpu')
                 else:
                     print("No baseline best checkpoint found yet. First candidate will become the baseline automatically.")
 

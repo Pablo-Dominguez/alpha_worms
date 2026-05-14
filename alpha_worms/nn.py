@@ -108,8 +108,10 @@ class WormsPredictor:
         state = self.tensor_engine.to_temporal_tensor(state)
 
         # Prepare state for the network
-        state_tensor = torch.FloatTensor(state.astype(np.float32)).to(self.device)
-        state_tensor = state_tensor.unsqueeze(0) # Dynamically add batch dimension
+        
+        # Fix - 1 allocation, consistent with predict_batch
+        actual_device = next(self.nnet.parameters()).device
+        state_tensor = torch.as_tensor(state, device=actual_device, dtype=torch.float32).unsqueeze(0)
 
         self.nnet.eval() # Set to evaluation mode
         with torch.no_grad():
@@ -138,9 +140,10 @@ class WormsPredictor:
                 # Still a DTO (from manual testing or initial state)
                 encoded_states.append(self.tensor_engine.to_temporal_tensor(state))
         try:
-            new_states = torch.FloatTensor(np.array(encoded_states)).to(self.device)
-            target_pis = torch.FloatTensor(np.array(target_pis)).to(self.device)
-            target_vs = torch.FloatTensor(np.array(target_vs)).to(self.device)
+            
+            new_states = torch.as_tensor(np.array(encoded_states), device=self.device, dtype=torch.float32)
+            target_pis = torch.as_tensor(np.array(target_pis),     device=self.device, dtype=torch.float32)
+            target_vs  = torch.as_tensor(np.array(target_vs),      device=self.device, dtype=torch.float32)
         except Exception as e:
             print('examples',examples)
             print(f"Error converting training examples to tensors: {e}")
@@ -183,7 +186,7 @@ class WormsPredictor:
         }, filepath)
         print(f"Model saved to {filepath}")
 
-    def load_checkpoint(self, folder='checkpoints', filename='checkpoint.pth.tar'):
+    def load_checkpoint(self, folder='checkpoints', filename='checkpoint.pth.tar', load_optimizer=True):
         """
         Loads weights into the NN from a saved file.
         """
@@ -195,11 +198,15 @@ class WormsPredictor:
             return
 
         # Load the file from disk
-        checkpoint = torch.load(filepath, map_location=self.device)
+        actual_device = next(self.nnet.parameters()).device
+        checkpoint = torch.load(filepath, map_location=actual_device)
         
         # Here are the built-in PyTorch methods being used:
         self.nnet.load_state_dict(checkpoint['state_dict'])
-        self.optimizer.load_state_dict(checkpoint['optimizer'])
+        
+        # With:
+        if load_optimizer:
+            self.optimizer.load_state_dict(checkpoint['optimizer'])
         print(f"Model loaded from {filepath}")
     
     def nn_next_move(self, game_dto: GameDTO):
@@ -249,8 +256,8 @@ class WormsPredictor:
                 encoded_states.append(self.tensor_engine.to_temporal_tensor(state))
         
         # 1. Fast conversion from list of arrays to a single Torch Tensor
-        batch_tensor = torch.as_tensor(np.array(encoded_states), device=self.device, dtype=torch.float32)
-        
+        actual_device = next(self.nnet.parameters()).device
+        batch_tensor = torch.as_tensor(np.array(encoded_states), device=actual_device, dtype=torch.float32)
         # 2. Standard GPU Inference
         self.nnet.eval()
         with torch.no_grad():
