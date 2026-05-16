@@ -140,7 +140,7 @@ class MCTS:
         # 4. SAFETY CHECK
         if best_act == -1 or valids[best_act] == 0:
              print(f"CRITICAL MISMATCH. Hash: {s}")
-             best_act = np.random.choice(np.where(valids==1)[0])
+             best_act = np.random.choice([a for a, v in enumerate(valids) if v == 1])
 
         # 5. TRANSITION (Simplified!)
         next_s_raw = self.game.get_next_state(state, best_act)

@@ -16,9 +16,7 @@ import gc
 import logging
 import sys
 
-# FIX 2: Set spawn method at module entry to prevent CUDA/fork deadlocks on WSL2/Linux
-if __name__ == '__main__':
-    mp.set_start_method('spawn', force=True)
+# Spawn method is set inside learn() to ensure it applies regardless of entry script.
 
 # Configure logging for worker heartbeat
 logging.basicConfig(
@@ -324,7 +322,9 @@ class Worms:
             active_mcts = mcts_p1 if current_player == 1 else mcts_p2
             pi = active_mcts.get_action_probs(canonical_state, temp=0)
             action = int(np.argmax(pi))
+            prev_state = state
             state = self.game.get_next_state(state, action)
+            state.previous_dto = prev_state
 
             winner = self.game.get_winner(state)
             if winner != 0:
@@ -344,6 +344,15 @@ class Worms:
         """
         True AlphaZero IPC Multiprocessing Pipeline.
         """
+        # Must be set before any mp.Process is created, regardless of entry script.
+        # fork + active CUDA context = guaranteed segfault in the child.
+        try:
+            mp.set_start_method('spawn', force=True)
+        except RuntimeError:
+            pass
+        # Prevent OpenMP thread explosion: N workers × K threads = N×K threads fighting
+        os.environ.setdefault('OMP_NUM_THREADS', '1')
+        os.environ.setdefault('MKL_NUM_THREADS', '1')
 
         os.nice(10)
         if self.nnet is None:
@@ -555,6 +564,8 @@ class Worms:
         FIX 5: Added heartbeat logging every 5 games.
         """
         import time
+        import torch as _torch
+        _torch.set_num_threads(1)  # Prevent OpenMP explosion inside each worker process
         # 1. Create the fake predictor
         proxy_nnet = IPCPredictorProxy(worker_id, request_queue, worker_pipe)
 
@@ -612,7 +623,8 @@ class ArenaPredictorProxy:
         event = threading.Event()
         result = {}
         self.arena_queue.put((self.model, safe_tensor, event, result))
-        event.wait()
+        if not event.wait(timeout=120):
+            raise TimeoutError("Arena batching thread stopped responding after 120s (crash or deadlock)")
         return result['pi'], result['v']
 
 
