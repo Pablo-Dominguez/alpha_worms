@@ -240,9 +240,10 @@ class Worms:
         baseline_wins = sum(1 for r in results if r == -1)
         draws = sum(1 for r in results if r == 0)
 
-        win_rate = challenger_wins / arena_games if arena_games > 0 else 0
-        print(f"Arena results: challenger wins={challenger_wins}, baseline wins={baseline_wins}, draws={draws}, win_rate={win_rate:.3f}")
-
+        decisive = challenger_wins + baseline_wins
+        win_rate = challenger_wins / decisive if decisive > 0 else 0.5
+        print(f"Arena results: challenger wins={challenger_wins}, baseline wins={baseline_wins}, draws={draws}, win_rate={win_rate:.3f} ({decisive} decisive)")
+        
         if win_rate >= arena_threshold:
             print(f"Challenger passed the arena threshold ({arena_threshold}).")
             return True
