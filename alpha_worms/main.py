@@ -255,44 +255,43 @@ class Worms:
         """
         Batches inference requests for both challenger and baseline models to optimize GPU usage.
         """
-        batch_size = 8  # Reduced to save memory
+        batch_size = 8
+
+        def flush(requests):
+            challenger_reqs = [(i, r) for i, r in enumerate(requests) if r[0] is challenger]
+            baseline_reqs   = [(i, r) for i, r in enumerate(requests) if r[0] is baseline]
+            if challenger_reqs:
+                states = [r[1] for _, r in challenger_reqs]
+                policies, values = challenger.predict_batch(states)
+                for idx, (orig_idx, _) in enumerate(challenger_reqs):
+                    requests[orig_idx][3]['pi'] = policies[idx]
+                    requests[orig_idx][3]['v']  = values[idx]
+                    requests[orig_idx][2].set()
+            if baseline_reqs:
+                states = [r[1] for _, r in baseline_reqs]
+                policies, values = baseline.predict_batch(states)
+                for idx, (orig_idx, _) in enumerate(baseline_reqs):
+                    requests[orig_idx][3]['pi'] = policies[idx]
+                    requests[orig_idx][3]['v']  = values[idx]
+                    requests[orig_idx][2].set()
+
         while True:
             requests = []
             try:
                 while len(requests) < batch_size:
                     req = arena_queue.get(timeout=0.01)
                     if req == "STOP":
+                        # Flush any already-collected requests so their threads
+                        # don't hang on event.wait() for the full 120s timeout.
+                        if requests:
+                            flush(requests)
                         return
                     requests.append(req)
             except queue.Empty:
                 pass
 
             if requests:
-                # Group requests by model
-                challenger_reqs = [(i, r) for i, r in enumerate(requests) if r[0] is challenger]
-                baseline_reqs = [(i, r) for i, r in enumerate(requests) if r[0] is baseline]
-
-                # Process challenger batch
-                if challenger_reqs:
-                    states = [r[1] for _, r in challenger_reqs]
-                    policies, values = challenger.predict_batch(states)
-                    for idx, (orig_idx, _) in enumerate(challenger_reqs):
-                        requests[orig_idx][3]['pi'] = policies[idx]
-                        requests[orig_idx][3]['v'] = values[idx]
-                        requests[orig_idx][2].set()
-
-                # Process baseline batch
-                if baseline_reqs:
-                    states = [r[1] for _, r in baseline_reqs]
-                    policies, values = baseline.predict_batch(states)
-                    for idx, (orig_idx, _) in enumerate(baseline_reqs):
-                        requests[orig_idx][3]['pi'] = policies[idx]
-                        requests[orig_idx][3]['v'] = values[idx]
-                        requests[orig_idx][2].set()
-
-                # Clear memory
-                del requests
-                # gc.collect()
+                flush(requests)
 
     def play_single_arena_game(self, challenger, baseline, arena_args, arena_queue, challenger_goes_second):
         """
@@ -433,10 +432,24 @@ class Worms:
                         continue
                     requests_batch.append(req)
                 except queue.Empty:
-                    # FIX 1: Timeout hit - check if any workers are stuck
+                    # Queue is idle — flush any pending inference requests immediately.
+                    # Without this, a worker that sent a request and is blocked on pipe.recv()
+                    # will never get a response if the queue drains via DATA/DONE messages
+                    # before the batch-size threshold is reached.
+                    if len(requests_batch) > 0:
+                        worker_ids = [r[0] for r in requests_batch]
+                        states = [r[1] for r in requests_batch]
+                        logger.info(f"Flushing {len(requests_batch)} pending inference requests on idle queue.")
+                        policies, values = self.nnet.predict_batch(states)
+                        for idx, w_id in enumerate(worker_ids):
+                            parent_pipes[w_id].send((policies[idx], values[idx]))
+                        requests_batch = []
+                        last_activity_time = datetime.now()
+                        continue
+
                     time_elapsed = (datetime.now() - last_activity_time).total_seconds()
                     logger.warning(f"No worker activity for {time_elapsed}s. Active workers: {active_workers}")
-                    
+
                     if time_elapsed > worker_timeout + 10:
                         logger.critical(f"Silent deadlock detected! Terminating {len(processes)} worker processes.")
                         for p in processes:
