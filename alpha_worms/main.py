@@ -130,6 +130,25 @@ class Worms:
         
         return 0
 
+    def _get_latest_checkpoint_iter(self):
+        """
+        Scans the checkpoint folder and returns the highest iteration number without loading weights.
+        Used when the best checkpoint will be loaded anyway, making a full load_model() wasteful.
+        """
+        folder = self.args['checkpoint']
+        if not os.path.exists(folder):
+            return 0
+        latest_iter = 0
+        for f in os.listdir(folder):
+            if f.startswith("checkpoint_") and f.endswith(".pth.tar"):
+                try:
+                    iter_num = int(f.split("_")[1].split(".")[0])
+                    if iter_num > latest_iter:
+                        latest_iter = iter_num
+                except ValueError:
+                    continue
+        return latest_iter
+
     def load_history(self):
         """
         Loads all previous self-play games from the history folder into the deque.
@@ -203,13 +222,9 @@ class Worms:
 
         print(f"Starting arena comparison: {arena_games} games, threshold={arena_threshold}, sims={self.args.get('numMCTSSims')}x{sim_multiplier}")
         
-        # FIX 4: Check GPU memory usage and move baseline to CPU for arena
         gpu_usage = self.check_gpu_memory_usage()
         if gpu_usage is not None:
             logger.info(f"GPU memory usage before arena: {gpu_usage:.1f}%")
-        if hasattr(baseline, 'nnet'):
-            baseline.nnet.to('cpu')
-            logger.info("Moved baseline model to CPU for arena to save GPU memory.")
 
         arena_args = self.args.copy()
         arena_args['numMCTSSims'] = int(self.args.get('numMCTSSims', 80) * sim_multiplier)
@@ -224,17 +239,25 @@ class Worms:
         num_workers = min(arena_games, 4)  # Limit to 4 threads to avoid GPU overload
         
         results = []
-        with ThreadPoolExecutor(max_workers=num_workers) as executor:
-            futures = [
-                executor.submit(self.play_single_arena_game, challenger, baseline, arena_args, arena_queue, game_idx % 2 == 0)
-                for game_idx in range(arena_games)
-            ]
-            for future in as_completed(futures):
-                results.append(future.result())
-
-        # Stop the batching thread after all arena games have completed
-        arena_queue.put("STOP")
-        batching_thread.join(timeout=1.0)
+        try:
+            with ThreadPoolExecutor(max_workers=num_workers) as executor:
+                futures = [
+                    executor.submit(self.play_single_arena_game, challenger, baseline, arena_args, arena_queue, game_idx % 2 == 0)
+                    for game_idx in range(arena_games)
+                ]
+                for future in as_completed(futures):
+                    try:
+                        results.append(future.result())
+                    except Exception as e:
+                        # A single game failure (e.g. 120s proxy TimeoutError) counts as a draw
+                        # rather than crashing the entire arena comparison and killing the training loop.
+                        logger.error(f"Arena game failed with exception: {e}. Counting as draw.")
+                        results.append(0)
+        finally:
+            # Always stop the batching thread — even if a future raises an exception
+            # (e.g. TimeoutError from the 120s proxy timeout), so it doesn't spin forever.
+            arena_queue.put("STOP")
+            batching_thread.join(timeout=2.0)
 
         challenger_wins = sum(1 for r in results if r == 1)
         baseline_wins = sum(1 for r in results if r == -1)
@@ -360,20 +383,23 @@ class Worms:
             self.nnet = WormsPredictor()
 
         # --- NEW: LOAD PREVIOUS STATE ---
-        start_iter = self.load_model()
-        self.load_history()
-
-        # If a best checkpoint exists (from previous arena evaluations), load it instead of the latest
+        # When a best checkpoint exists, only scan for the iteration number — don't load
+        # the latest checkpoint's weights since they'll be immediately overwritten.
         best_path = self.get_best_checkpoint_path()
         if os.path.exists(best_path):
+            start_iter = self._get_latest_checkpoint_iter()
             self.nnet.load_checkpoint(folder=self.args['checkpoint'], filename='checkpoint_best.pth.tar')
             best_iter_file = os.path.join(self.args['checkpoint'], 'best_iteration.txt')
             if os.path.exists(best_iter_file):
                 with open(best_iter_file, 'r') as f:
-                    start_iter = int(f.read().strip())
-                print(f"Resumed from best model at iteration {start_iter}.")
+                    best_iter = int(f.read().strip())
+                print(f"Loaded best model weights (from iteration {best_iter}). Resuming loop from checkpoint {start_iter}.")
             else:
-                print("Warning: Best model loaded but iteration file missing. Using latest iteration.")
+                print(f"Loaded best model weights. Resuming loop from checkpoint {start_iter}.")
+        else:
+            # No best checkpoint yet — load the latest checkpoint's weights to continue training.
+            start_iter = self.load_model()
+        self.load_history()
 
         for i in range(start_iter + 1, start_iter + self.args['num_iterations'] + 1):
             print(f"\n--- Iteration {i} ---")
@@ -383,8 +409,8 @@ class Worms:
                 best_path = self.get_best_checkpoint_path()
                 if os.path.exists(best_path):
                     baseline_predictor = WormsPredictor()
+                    baseline_predictor.nnet.to('cpu')  # move before load so checkpoint is read directly into RAM, not VRAM
                     baseline_predictor.load_checkpoint(folder=self.args['checkpoint'], filename='checkpoint_best.pth.tar', load_optimizer=False)
-                    baseline_predictor.nnet.to('cpu')
                 else:
                     print("No baseline best checkpoint found yet. First candidate will become the baseline automatically.")
 
@@ -414,7 +440,6 @@ class Worms:
                 requests_batch = []
                 worker_timeout = 60
                 last_activity_time = datetime.now()
-                import time
 
                 logger.info(f"Started {num_workers} CPU workers. GPU Batching server listening...")
 
@@ -526,10 +551,6 @@ class Worms:
                     best_path = self.get_best_checkpoint_path()
                     if os.path.exists(best_path):
                         self.nnet.load_checkpoint(folder=self.args['checkpoint'], filename='checkpoint_best.pth.tar')
-                # FIX 4: Arena Resource Management - Move baseline to CPU and free GPU memory
-                if hasattr(baseline_predictor, 'nnet'):
-                    baseline_predictor.nnet.to('cpu')
-                    logger.info("Baseline model moved to CPU for memory efficiency")
                 del baseline_predictor
                 gc.collect()
                 if torch.cuda.is_available():
@@ -568,7 +589,7 @@ class Worms:
                     for example in batch:
                         f.write(f"{example}\n")
                 print(f"Error during training: {e}")
-                raise e
+                raise
     
     @staticmethod
     def worker_play_games(worker_id, num_games, request_queue, worker_pipe, args, game):
@@ -580,6 +601,12 @@ class Worms:
         import time
         import torch as _torch
         _torch.set_num_threads(1)  # Prevent OpenMP explosion inside each worker process
+        # Configure logging — logging.basicConfig() from the parent is NOT inherited by spawned
+        # subprocesses. Without this, all logger.info/error calls below are completely silent.
+        logging.basicConfig(
+            level=logging.INFO,
+            format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+        )
         # 1. Create the fake predictor
         proxy_nnet = IPCPredictorProxy(worker_id, request_queue, worker_pipe)
 

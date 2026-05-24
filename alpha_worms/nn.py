@@ -147,7 +147,7 @@ class WormsPredictor:
         except Exception as e:
             print('examples',examples)
             print(f"Error converting training examples to tensors: {e}")
-            raise e
+            raise
         # Zero gradients
         self.optimizer.zero_grad()
 
@@ -175,9 +175,11 @@ class WormsPredictor:
         """
         Saves the current weights and optimizer state to a file.
         """
-        filepath = os.path.join(folder, filename)
-        if not os.path.exists(folder):
-            os.makedirs(folder)
+        abspath = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        filepath = os.path.join(abspath, folder, filename)
+        folder_path = os.path.join(abspath, folder)
+        if not os.path.exists(folder_path):
+            os.makedirs(folder_path)
             
         # We save a dictionary containing the model weights AND the optimizer state
         torch.save({

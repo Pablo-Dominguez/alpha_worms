@@ -40,21 +40,26 @@ class MCTS:
         if s not in self.Ps:
             self.search(state) 
             
-        # 2. Add Dirichlet Noise to the Root ONCE
-        epsilon = 0.25
-        alpha = 0.3
+        # 2. Add Dirichlet Noise to the Root — only during training (temp > 0).
+        # Arena evaluation uses temp=0 and must play deterministically; applying noise
+        # corrupts PUCT selection for both models equally, producing more draws, fewer
+        # decisive games, and high win-rate variance that blocks genuinely better models
+        # from passing the arena threshold.
         valids = self.game.get_allowed_moves(state)
-        
-        noise = np.random.dirichlet([alpha] * self.game.game_size)
-        self.Ps[s] = (1 - epsilon) * self.Ps[s] + epsilon * noise
-        
-        # Re-mask and re-normalize
-        self.Ps[s] *= valids
-        sum_Ps = np.sum(self.Ps[s])
-        if sum_Ps > 0:
-            self.Ps[s] /= sum_Ps
-        else:
-            self.Ps[s] = valids / np.sum(valids)
+
+        if temp > 0:
+            epsilon = 0.25
+            alpha = 0.3
+            noise = np.random.dirichlet([alpha] * self.game.game_size)
+            self.Ps[s] = (1 - epsilon) * self.Ps[s] + epsilon * noise
+
+            # Re-mask and re-normalize
+            self.Ps[s] *= valids
+            sum_Ps = np.sum(self.Ps[s])
+            if sum_Ps > 0:
+                self.Ps[s] /= sum_Ps
+            else:
+                self.Ps[s] = valids / np.sum(valids)
 
         # 3. Run the rest of the MCTS Simulations
         for i in range(self.args['numMCTSSims'] - 1):
@@ -142,10 +147,16 @@ class MCTS:
              print(f"CRITICAL MISMATCH. Hash: {s}")
              best_act = np.random.choice([a for a, v in enumerate(valids) if v == 1])
 
-        # 5. TRANSITION (Simplified!)
+        # 5. TRANSITION
         next_s_raw = self.game.get_next_state(state, best_act)
         turn_switched = next_s_raw.board_map.current_player != state.board_map.current_player
-        
+
+        # Thread temporal history through the MCTS tree.
+        # state is canonical (current_player=1) with a live previous_dto chain.
+        # get_canonical_form will pass it to _get_canonical_history, which re-maps
+        # all history frames consistently to the new canonical player's perspective.
+        next_s_raw.previous_dto = state
+
         next_s = self.game.get_canonical_form(next_s_raw)
         
         # Recursively search the next canonical state
