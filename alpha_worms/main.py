@@ -395,100 +395,100 @@ class Worms:
             parent_pipes, child_pipes = zip(*[mp.Pipe() for _ in range(num_workers)])
             
             processes = []
-            for worker_id in range(num_workers):
-                games_per_worker = num_episodes // num_workers
-                if worker_id < (num_episodes % num_workers):
-                    games_per_worker += 1
-                
-                p = mp.Process(
-                    target=Worms.worker_play_games,
-                    args=(worker_id, games_per_worker, request_queue, child_pipes[worker_id], 
-                        self.args, self.game)
-                )
-                p.start()
-                processes.append(p)
-
             iteration_train_data = []
-            active_workers = num_workers
-            requests_batch = []
-            worker_timeout = 60  # FIX 1: 60-second timeout for worker requests
-            last_activity_time = datetime.now()
-            import time
-            
-            logger.info(f"Started {num_workers} CPU workers. GPU Batching server listening...")
-            
-            while active_workers > 0:
-                try:
-                    req = request_queue.get(timeout=worker_timeout)  # FIX 1: Timeout prevents indefinite blocking
-                    last_activity_time = datetime.now()
-                    
-                    if req == "DONE":
-                        active_workers -= 1
-                        logger.info(f"Worker signaled completion. {active_workers} workers remaining.")
+            try:
+                for worker_id in range(num_workers):
+                    games_per_worker = num_episodes // num_workers
+                    if worker_id < (num_episodes % num_workers):
+                        games_per_worker += 1
+
+                    p = mp.Process(
+                        target=Worms.worker_play_games,
+                        args=(worker_id, games_per_worker, request_queue, child_pipes[worker_id],
+                              self.args, self.game)
+                    )
+                    p.start()
+                    processes.append(p)
+
+                active_workers = num_workers
+                requests_batch = []
+                worker_timeout = 60
+                last_activity_time = datetime.now()
+                import time
+
+                logger.info(f"Started {num_workers} CPU workers. GPU Batching server listening...")
+
+                while active_workers > 0:
+                    try:
+                        req = request_queue.get(timeout=worker_timeout)
+                        last_activity_time = datetime.now()
+
+                        if req == "DONE":
+                            active_workers -= 1
+                            logger.info(f"Worker signaled completion. {active_workers} workers remaining.")
+                            continue
+                        elif req[0] == "DATA":
+                            iteration_train_data.extend(req[1])
+                            logger.info(f"Received {len(req[1])} training examples from worker.")
+                            continue
+                        requests_batch.append(req)
+                    except queue.Empty:
+                        # Queue is idle — flush any pending inference requests immediately.
+                        # Without this, a worker blocked on pipe.recv() will never get a
+                        # response if the queue drains via DATA/DONE before batch_size fills.
+                        if len(requests_batch) > 0:
+                            worker_ids = [r[0] for r in requests_batch]
+                            states = [r[1] for r in requests_batch]
+                            logger.info(f"Flushing {len(requests_batch)} pending inference requests on idle queue.")
+                            policies, values = self.nnet.predict_batch(states)
+                            for idx, w_id in enumerate(worker_ids):
+                                parent_pipes[w_id].send((policies[idx], values[idx]))
+                            requests_batch = []
+                            last_activity_time = datetime.now()
+                            continue
+
+                        time_elapsed = (datetime.now() - last_activity_time).total_seconds()
+                        logger.warning(f"No worker activity for {time_elapsed}s. Active workers: {active_workers}")
+
+                        if time_elapsed > worker_timeout + 10:
+                            logger.critical(f"Silent deadlock detected! Terminating {len(processes)} worker processes.")
+                            for p in processes:
+                                if p.is_alive():
+                                    p.terminate()
+                                    p.join(timeout=5)
+                                    if p.is_alive():
+                                        p.kill()
+                            raise RuntimeError("Silent deadlock detected: workers hung for >70s")
                         continue
-                    elif req[0] == "DATA":
-                        iteration_train_data.extend(req[1])
-                        logger.info(f"Received {len(req[1])} training examples from worker.")
-                        continue
-                    requests_batch.append(req)
-                except queue.Empty:
-                    # Queue is idle — flush any pending inference requests immediately.
-                    # Without this, a worker that sent a request and is blocked on pipe.recv()
-                    # will never get a response if the queue drains via DATA/DONE messages
-                    # before the batch-size threshold is reached.
-                    if len(requests_batch) > 0:
+                    except Exception as e:
+                        logger.error(f"Error receiving from queue: {e}")
+                        pass
+
+                    if len(requests_batch) >= self.args['batch_size'] or (len(requests_batch) > 0 and request_queue.empty()):
                         worker_ids = [r[0] for r in requests_batch]
                         states = [r[1] for r in requests_batch]
-                        logger.info(f"Flushing {len(requests_batch)} pending inference requests on idle queue.")
+                        logger.debug(f"Processing GPU batch with {len(requests_batch)} requests")
                         policies, values = self.nnet.predict_batch(states)
                         for idx, w_id in enumerate(worker_ids):
                             parent_pipes[w_id].send((policies[idx], values[idx]))
                         requests_batch = []
-                        last_activity_time = datetime.now()
-                        continue
 
-                    time_elapsed = (datetime.now() - last_activity_time).total_seconds()
-                    logger.warning(f"No worker activity for {time_elapsed}s. Active workers: {active_workers}")
-
-                    if time_elapsed > worker_timeout + 10:
-                        logger.critical(f"Silent deadlock detected! Terminating {len(processes)} worker processes.")
-                        for p in processes:
-                            if p.is_alive():
-                                p.terminate()
-                                p.join(timeout=5)
-                                if p.is_alive():
-                                    p.kill()
-                        raise RuntimeError("Silent deadlock detected: workers hung for >70s")
-                    continue
-                except Exception as e:
-                    logger.error(f"Error receiving from queue: {e}")
-                    pass
-                
-                if len(requests_batch) >= self.args['batch_size'] or (len(requests_batch) > 0 and request_queue.empty()):
-                    worker_ids = [r[0] for r in requests_batch]
-                    states = [r[1] for r in requests_batch]
-                    logger.debug(f"Processing GPU batch with {len(requests_batch)} requests")
-                    policies, values = self.nnet.predict_batch(states)
-                    for idx, w_id in enumerate(worker_ids):
-                        parent_pipes[w_id].send((policies[idx], values[idx]))
-                    requests_batch = []
-
-            for p in processes:
-                if p.is_alive():
-                    p.join(timeout=5)
-                if p.is_alive():
-                    logger.warning(f"Process {p.pid} did not terminate cleanly. Killing...")
-                    p.kill()
-                
-            # Enhanced worker process cleanup to prevent zombie processes
-            request_queue.close()
-            if hasattr(request_queue, 'cancel_join_thread'):
+            finally:
+                # Guaranteed cleanup on normal exit, KeyboardInterrupt, or any exception.
+                # terminate() before join() ensures workers that are blocked on pipe.recv()
+                # don't hang the main process indefinitely.
+                for p in processes:
+                    if p.is_alive():
+                        p.terminate()
+                        p.join(timeout=5)
+                    if p.is_alive():
+                        logger.warning(f"Process {p.pid} did not terminate cleanly. Killing...")
+                        p.kill()
+                request_queue.close()
                 request_queue.cancel_join_thread()
-            else:
-                request_queue.join_thread()
-            for p_pipe, c_pipe in zip(parent_pipes, child_pipes):
-                p_pipe.close()
-                c_pipe.close()
+                for p_pipe, c_pipe in zip(parent_pipes, child_pipes):
+                    p_pipe.close()
+                    c_pipe.close()
 
             if len(iteration_train_data) > 0:
                 self.save_iteration_data(i, iteration_train_data)

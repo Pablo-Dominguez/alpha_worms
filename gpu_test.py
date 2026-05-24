@@ -4,9 +4,29 @@ from alpha_worms.main import Worms
 import torch
 import torch.multiprocessing as mp
 import time
+import glob
+import os
 
 # MUST BE AT THE TOP: Prevents CPU thrashing in the workers
 torch.set_num_threads(1)
+
+
+def cleanup_leaked_semaphores():
+    """
+    Remove POSIX semaphore files left in /dev/shm by a previously crashed run.
+    Python's multiprocessing.Queue creates named semaphores with the prefix
+    'sem.mp-' that persist on disk if the process was killed before cleanup.
+    """
+    pattern = '/dev/shm/sem.mp-*'
+    leaked = glob.glob(pattern)
+    if leaked:
+        print(f"[Startup] Removing {len(leaked)} leaked semaphore(s) from a previous run...")
+        for path in leaked:
+            try:
+                os.unlink(path)
+            except OSError:
+                pass  # already gone or no permission
+
 
 if __name__ == '__main__':
 
@@ -14,6 +34,8 @@ if __name__ == '__main__':
         mp.set_start_method('spawn', force=True)
     except RuntimeError:
         pass
+
+    cleanup_leaked_semaphores()
 
     # 1. Initialize Game and Brain
     game = GameEngine() 
