@@ -126,7 +126,7 @@ class MCTS:
             return v
 
         # 3. SELECTION (PUCT)
-        valids = self.game.get_allowed_moves(state) 
+        valids = self.Vs[s]  # cached at expansion — same hash guarantees same valid moves
         cur_best = -float('inf')
         best_act = -1
 

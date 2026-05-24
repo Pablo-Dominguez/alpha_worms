@@ -14,7 +14,6 @@ import shutil
 from datetime import datetime
 import gc
 import logging
-import sys
 
 # Spawn method is set inside learn() to ensure it applies regardless of entry script.
 
@@ -188,7 +187,6 @@ class Worms:
         if not torch.cuda.is_available():
             return None
         try:
-            reserved = torch.cuda.memory_reserved(0)
             allocated = torch.cuda.memory_allocated(0)
             total = torch.cuda.get_device_properties(0).total_memory
             usage_pct = (allocated / total) * 100
