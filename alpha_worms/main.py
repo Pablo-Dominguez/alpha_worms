@@ -229,7 +229,11 @@ class Worms:
 
         # Dual-model batching setup for arena
         arena_queue = queue.Queue()
-        batching_thread = threading.Thread(target=self.batch_arena_requests, args=(arena_queue, challenger, baseline), daemon=True)
+        # NOT daemon: we join explicitly below.  A daemon thread killed while
+        # mid-CUDA-forward-pass can corrupt the CUDA allocator state, which
+        # then causes a segfault when torch.cuda.empty_cache() runs on the
+        # main thread after arena_compare() returns.
+        batching_thread = threading.Thread(target=self.batch_arena_requests, args=(arena_queue, challenger, baseline))
         batching_thread.start()
 
         # Multi-threaded arena evaluation using ThreadPoolExecutor
@@ -237,7 +241,19 @@ class Worms:
         num_workers = min(arena_games, 4)  # Limit to 4 threads to avoid GPU overload
         
         results = []
+        # Set stack size before executor so game threads get 32 MB.
+        # Initialise old_stack_size to 0 (= "use platform default") so the
+        # finally block is safe to call even if stack_size() raises.
+        import threading as _threading
+        old_stack_size = 0
         try:
+            old_stack_size = _threading.stack_size(32 * 1024 * 1024)
+        except (RuntimeError, ValueError):
+            pass  # Platform doesn't support custom stack size; 8 MB default is fine
+        try:
+            # Each arena thread must have its own GameEngine to avoid sharing the
+            # global NumPy RandomState (legacy np.random is NOT thread-safe and
+            # causes heap corruption → segfault when called concurrently).
             with ThreadPoolExecutor(max_workers=num_workers) as executor:
                 futures = [
                     executor.submit(self.play_single_arena_game, challenger, baseline, arena_args, arena_queue, game_idx % 2 == 0)
@@ -252,10 +268,19 @@ class Worms:
                         logger.error(f"Arena game failed with exception: {e}. Counting as draw.")
                         results.append(0)
         finally:
+            # Restore the original stack size so we don't affect other thread pools.
+            _threading.stack_size(old_stack_size)
             # Always stop the batching thread — even if a future raises an exception
             # (e.g. TimeoutError from the 120s proxy timeout), so it doesn't spin forever.
             arena_queue.put("STOP")
-            batching_thread.join(timeout=2.0)
+            # Allow up to 30 s for the thread to finish its last predict_batch() call.
+            # We must ensure it has fully exited before the caller does
+            # `del baseline_predictor` and `torch.cuda.empty_cache()`, otherwise a
+            # concurrent CUDA allocation in the batching thread races with the
+            # allocator clean-up and can segfault.
+            batching_thread.join(timeout=30.0)
+            if batching_thread.is_alive():
+                logger.warning("Arena batching thread did not finish within 30 s — possible hang.")
 
         challenger_wins = sum(1 for r in results if r == 1)
         baseline_wins = sum(1 for r in results if r == -1)
@@ -319,6 +344,11 @@ class Worms:
         Play a single arena game between challenger and baseline.
         Returns 1 if challenger wins, -1 if baseline wins, 0 for draw.
         """
+        # Each thread gets its own GameEngine so that calls to np.random inside
+        # get_initial_state / throw_dices / end_turn are never concurrent on the
+        # same RNG state (np.random legacy API is NOT thread-safe).
+        game = GameEngine()
+
         if challenger_goes_second:
             p1_nnet, p2_nnet = baseline, challenger
         else:
@@ -328,33 +358,33 @@ class Worms:
         p1_proxy = ArenaPredictorProxy(p1_nnet, arena_queue)
         p2_proxy = ArenaPredictorProxy(p2_nnet, arena_queue)
 
-        mcts_p1 = MCTS(self.game, p1_proxy, arena_args)
-        mcts_p2 = MCTS(self.game, p2_proxy, arena_args)
+        mcts_p1 = MCTS(game, p1_proxy, arena_args)
+        mcts_p2 = MCTS(game, p2_proxy, arena_args)
         
-        state = self.game.get_initial_state()
+        state = game.get_initial_state()
         turn_count = 0
         max_turns = 200
 
         while True:
             turn_count += 1
             current_player = state.board_map.current_player
-            canonical_state = self.game.get_canonical_form(state)
+            canonical_state = game.get_canonical_form(state)
 
             active_mcts = mcts_p1 if current_player == 1 else mcts_p2
             pi = active_mcts.get_action_probs(canonical_state, temp=0)
             action = int(np.argmax(pi))
             prev_state = state
-            state = self.game.get_next_state(state, action)
+            state = game.get_next_state(state, action)
             state.previous_dto = prev_state
 
-            winner = self.game.get_winner(state)
+            winner = game.get_winner(state)
             if winner != 0:
                 if challenger_goes_second:
                     return -winner  # Invert because challenger is P2
                 return winner
 
             if turn_count >= max_turns:
-                score_winner = self.game.get_score_winner(state)
+                score_winner = game.get_score_winner(state)
                 if score_winner == 0:
                     return 0
                 if challenger_goes_second:
@@ -406,8 +436,7 @@ class Worms:
             if self.args.get('arenaCompare', 0) > 0:
                 best_path = self.get_best_checkpoint_path()
                 if os.path.exists(best_path):
-                    baseline_predictor = WormsPredictor()
-                    baseline_predictor.nnet.to('cpu')  # move before load so checkpoint is read directly into RAM, not VRAM
+                    baseline_predictor = WormsPredictor(device='cpu')
                     baseline_predictor.load_checkpoint(folder=self.args['checkpoint'], filename='checkpoint_best.pth.tar', load_optimizer=False)
                 else:
                     print("No baseline best checkpoint found yet. First candidate will become the baseline automatically.")
@@ -507,8 +536,19 @@ class Worms:
                     if p.is_alive():
                         logger.warning(f"Process {p.pid} did not terminate cleanly. Killing...")
                         p.kill()
+                # Drain any items left in the queue before closing.  Workers that were
+                # terminated mid-flight may have partially written DATA/DONE/inference
+                # requests.  Leaving them buffered causes the Queue's internal feeder
+                # thread to block on join, and calling cancel_join_thread() instead
+                # leaks the Queue's 3 POSIX semaphores (logged as "3 leaked semaphore
+                # objects" by resource_tracker at shutdown).
+                try:
+                    while True:
+                        request_queue.get_nowait()
+                except Exception:
+                    pass
                 request_queue.close()
-                request_queue.cancel_join_thread()
+                request_queue.join_thread()
                 for p_pipe, c_pipe in zip(parent_pipes, child_pipes):
                     p_pipe.close()
                     c_pipe.close()

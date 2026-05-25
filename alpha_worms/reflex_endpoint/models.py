@@ -3,7 +3,7 @@ from pydantic import BaseModel, Field
 import numpy as np
 
 def rand_dices():
-    return [int(x) for x in np.random.randint(1, 7, size=8)]
+    return [int(x) for x in np.random.default_rng().integers(1, 7, size=8)]
 
 class Dices(BaseModel):
     dices: list[int] = Field(default_factory=rand_dices)

@@ -10,7 +10,7 @@ class RawEngine:
 
     def get_initial_state(self) -> GameDTO:
         """Generates the initial game state."""
-        dices: list[int] = [int(x) for x in np.random.randint(1, 7, size=8)]
+        dices: list[int] = [int(x) for x in np.random.default_rng().integers(1, 7, size=8)]
         available_dices: list[int] = [0,1,2,3,4,5,6,7]
         selected_dices: list[int] = []
         dices_model = Dices(dices=dices,
@@ -67,7 +67,7 @@ class RawEngine:
         old_pieces_version.current_player = game_dto.board_map.current_player % 2 + 1
 
         # new_seed = self.game_generator(1)[0]*10000
-        dices: list[int] = [int(x) for x in np.random.randint(1, 7, size=8)]
+        dices: list[int] = [int(x) for x in np.random.default_rng().integers(1, 7, size=8)]
         available_dices: list[int] = [0,1,2,3,4,5,6,7]
         selected_dices: list[int] = []
         new_dices_model = Dices(dices=dices,
@@ -172,7 +172,7 @@ class RawEngine:
 
         new_dices_version = self.grey_out_dices(new_dices_version, reset=True)
 
-        new_dices =[(x,int(y)) for x,y in zip(new_dices_version.available_dices,np.random.randint(1, 7, size=len(new_dices_version.available_dices)))]
+        new_dices =[(x,int(y)) for x,y in zip(new_dices_version.available_dices,np.random.default_rng().integers(1, 7, size=len(new_dices_version.available_dices)))]
         total_dices = [(new_dices_version.dices[k] if k not in new_dices_version.available_dices else [y for (x,y) in new_dices if k==x][0]) 
                        for k in range(8)]
         # Update dices with new values
