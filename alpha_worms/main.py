@@ -14,6 +14,7 @@ import shutil
 from datetime import datetime
 import gc
 import logging
+import multiprocessing as py_mp
 
 # Spawn method is set inside learn() to ensure it applies regardless of entry script.
 
@@ -23,6 +24,37 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
+
+
+def _log_mp_state(tag, processes=None, request_queue=None):
+    """Lightweight diagnostics for IPC leak/deadlock triage."""
+    try:
+        children = py_mp.active_children()
+        child_pids = [p.pid for p in children if p.pid is not None]
+    except Exception as e:
+        child_pids = [f"error:{e}"]
+
+    proc_state = []
+    if processes:
+        for p in processes:
+            try:
+                proc_state.append(f"pid={p.pid},alive={p.is_alive()},exit={p.exitcode}")
+            except Exception as e:
+                proc_state.append(f"pid=?,err={e}")
+
+    qsize_info = "na"
+    if request_queue is not None:
+        try:
+            qsize_info = request_queue.qsize()
+        except (NotImplementedError, AttributeError):
+            qsize_info = "unsupported"
+        except Exception as e:
+            qsize_info = f"error:{e}"
+
+    logger.info(
+        f"[MP_STATE] {tag} | active_children={len(child_pids)} {child_pids} | "
+        f"tracked_processes={proc_state} | queue_qsize={qsize_info}"
+    )
 
 class Worms:
     def __init__(self, game: GameEngine, nnet: WormsPredictor, args):
@@ -463,6 +495,8 @@ class Worms:
                     p.start()
                     processes.append(p)
 
+                _log_mp_state("after_worker_start", processes=processes, request_queue=request_queue)
+
                 active_workers = num_workers
                 requests_batch = []
                 worker_timeout = 60
@@ -478,6 +512,7 @@ class Worms:
                         if req == "DONE":
                             active_workers -= 1
                             logger.info(f"Worker signaled completion. {active_workers} workers remaining.")
+                            _log_mp_state("after_done_signal", processes=processes, request_queue=request_queue)
                             continue
                         elif req[0] == "DATA":
                             iteration_train_data.extend(req[1])
@@ -526,32 +561,43 @@ class Worms:
                         requests_batch = []
 
             finally:
+                _log_mp_state("cleanup_start", processes=processes, request_queue=request_queue)
                 # Guaranteed cleanup on normal exit, KeyboardInterrupt, or any exception.
                 # terminate() before join() ensures workers that are blocked on pipe.recv()
                 # don't hang the main process indefinitely.
                 for p in processes:
                     if p.is_alive():
+                        logger.info(f"Terminating worker pid={p.pid}")
                         p.terminate()
                         p.join(timeout=5)
                     if p.is_alive():
                         logger.warning(f"Process {p.pid} did not terminate cleanly. Killing...")
                         p.kill()
+                _log_mp_state("after_process_terminate", processes=processes, request_queue=request_queue)
                 # Drain any items left in the queue before closing.  Workers that were
                 # terminated mid-flight may have partially written DATA/DONE/inference
                 # requests.  Leaving them buffered causes the Queue's internal feeder
                 # thread to block on join, and calling cancel_join_thread() instead
                 # leaks the Queue's 3 POSIX semaphores (logged as "3 leaked semaphore
                 # objects" by resource_tracker at shutdown).
+                drained_items = 0
                 try:
                     while True:
                         request_queue.get_nowait()
+                        drained_items += 1
                 except Exception:
                     pass
+                logger.info(f"Queue drain complete. drained_items={drained_items}")
+                _log_mp_state("before_queue_close", processes=processes, request_queue=request_queue)
                 request_queue.close()
+                logger.info("request_queue.close() complete")
                 request_queue.join_thread()
+                logger.info("request_queue.join_thread() complete")
                 for p_pipe, c_pipe in zip(parent_pipes, child_pipes):
                     p_pipe.close()
                     c_pipe.close()
+                logger.info("All pipe endpoints closed")
+                _log_mp_state("cleanup_end", processes=processes, request_queue=request_queue)
 
             if len(iteration_train_data) > 0:
                 self.save_iteration_data(i, iteration_train_data)
@@ -685,7 +731,9 @@ class Worms:
         gc.collect()  # Explicitly free memory
         
         # 4. Tell the Chef this worker is clocking out
+        logger.info(f"Worker {worker_id} sending DONE")
         request_queue.put("DONE")
+        logger.info(f"Worker {worker_id} DONE sent, worker exiting")
         
 class ArenaPredictorProxy:
     """
