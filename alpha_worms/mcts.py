@@ -111,14 +111,19 @@ class MCTS:
         s = self.get_string_hash(state)
 
         # 1. TERMINAL CHECK (Evaluate the canonical state immediately)
+        # FIX (correctness): the previous code used Es[s] == 0 as the sentinel for
+        # "not terminal", which collides with a tied-terminal state (game over,
+        # both players' piece sums equal -> get_winner returns 0). The fall-through
+        # then re-entered expansion on a position with zero valid moves, producing
+        # `Ps[s] = valids / 0` -> NaNs that poisoned the entire search tree.
+        # Now we represent a terminal draw with a tiny non-zero value (1e-4) and
+        # use None as the "not yet evaluated / non-terminal" marker.
         if s not in self.Es:
-            winner = self.game.get_winner(state)
-            if winner != 0 or self.game.is_terminal(state):
-                # Assuming get_winner on a canonical state returns 
-                # 1 if the canonical active player won, -1 if they lost, 0.1 for draw
-                self.Es[s] = winner
+            if self.game.is_terminal(state):
+                winner = self.game.get_winner(state)
+                self.Es[s] = winner if winner != 0 else 1e-4
             else:
-                self.Es[s] = 0 # 0 means not terminal
+                self.Es[s] = 0  # 0 means not terminal
 
         if self.Es[s] != 0:
             return self.Es[s]

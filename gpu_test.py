@@ -65,9 +65,9 @@ if __name__ == '__main__':
         'checkpoint': './checkpoints/',
         'log_file': 'gpu_test_output.log',
         'train_epochs': 20,        # Spend more time optimizing each batch on GPU
-        'arenaCompare': 20,        # Number of arena games for model validation
+        'arenaCompare': 33,        # Number of arena games for model validation
         'arenaThreshold': 0.55,    # Challenger must win at least 55% of arena games
-        'arenaSimMultiplier': 1,   # Arena uses 1x the self-play MCTS sims
+        'arenaSimMultiplier': 2,   # Arena uses 2x the self-play MCTS sims
     }
 
     # 3. Initialize the Trainer

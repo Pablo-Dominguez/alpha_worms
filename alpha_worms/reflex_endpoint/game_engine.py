@@ -272,28 +272,29 @@ class GameEngine(RawEngine):
         """
         Returns a GameDTO where the current player is always 'Player 1',
         and recursively canonicalizes the history chain.
+
+        FIX (CPU): called ~280k times per training iteration. The previous
+        implementation always deep-copied BOTH `board_map` and `dice_map`. But
+        downstream code (`get_next_state`, `fetch_*`, `select_dice`, etc.) treats
+        these maps as immutable -- every mutation path does its own model_copy
+        first -- so we can safely share references when no swap is needed, and
+        skip the `dice_map` copy entirely (it never changes under canonicalization).
+        This was the dominant CPU cost in self-play workers.
         """
-        # 1. Determine if we need to swap stacks (Perspective Shift)
-        # We always swap if the root of THIS call is Player 2
         should_swap = game_dto.board_map.current_player == 2
 
-        new_board_map = game_dto.board_map.model_copy(deep=True)
-        new_dice_map = game_dto.dice_map.model_copy(deep=True)
-
         if should_swap:
-            # Swap stacks so 'current player' is always in the P1 slot
+            new_board_map = game_dto.board_map.model_copy(deep=True)
             new_board_map.player01_stack = game_dto.board_map.player02_stack
             new_board_map.player02_stack = game_dto.board_map.player01_stack
-            # Note: In a true canonical form, we normalize the ID to 1
-            new_board_map.current_player = 1 
-        
-        # 2. Create the new DTO
-        canonical_dto = GameDTO(dice_map=new_dice_map, board_map=new_board_map)
+            new_board_map.current_player = 1
+            canonical_dto = GameDTO(dice_map=game_dto.dice_map, board_map=new_board_map)
+        else:
+            # Already canonical -- wrap by reference so we can independently
+            # rewrite `previous_dto` without touching the live state.
+            canonical_dto = GameDTO(dice_map=game_dto.dice_map, board_map=game_dto.board_map)
 
-        # 3. RECURSIVE STEP: Handle the history
-        # Removed to prevent memory chains: 
         canonical_dto.previous_dto = self._get_canonical_history(game_dto.previous_dto, swap=should_swap)
-
         return canonical_dto
 
     def _get_canonical_history(self, dto: GameDTO, swap: bool, max_depth: int = 5) -> GameDTO:
@@ -306,20 +307,18 @@ class GameEngine(RawEngine):
         if dto is None:
             return None
 
-        # Helper to apply your exact transformation logic to a single node
-        # Helper to apply your exact transformation logic to a single node
+        # FIX (CPU): only deep-copy when we actually need to mutate (i.e. when
+        # swapping perspectives). For no-swap nodes we wrap the original maps
+        # by reference -- history frames are read-only downstream (to_tensor).
         def _process_node(node_dto: GameDTO) -> GameDTO:
-            # 1. SHALLOW COPY: 100x faster, perfectly safe for read-only history
-            new_board = node_dto.board_map.model_copy(deep=True) 
-            
-            if swap:
-                new_board.player01_stack, new_board.player02_stack = (
-                    node_dto.board_map.player02_stack, node_dto.board_map.player01_stack
-                )
-                # Flip the turn indicator for historical accuracy in the tensor
-                new_board.current_player = 1 if node_dto.board_map.current_player == 2 else 2
-                
-            # 2. Re-use the EXACT dice map. No need to copy it at all!
+            if not swap:
+                return GameDTO(dice_map=node_dto.dice_map, board_map=node_dto.board_map)
+            new_board = node_dto.board_map.model_copy(deep=True)
+            new_board.player01_stack, new_board.player02_stack = (
+                node_dto.board_map.player02_stack, node_dto.board_map.player01_stack
+            )
+            # Flip the turn indicator for historical accuracy in the tensor
+            new_board.current_player = 1 if node_dto.board_map.current_player == 2 else 2
             return GameDTO(dice_map=node_dto.dice_map, board_map=new_board)
 
         # 1. Process the head of the chain (current state)

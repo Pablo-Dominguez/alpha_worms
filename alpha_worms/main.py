@@ -69,7 +69,7 @@ class Worms:
         state = game.get_initial_state()
         curr_player = 1 
         turn_count = 0        # 1. Add a turn counter
-        max_turns = 150       # 2. Set a reasonable upper limit for a game of Worms
+        max_turns = 250       # 2. Set a reasonable upper limit for a game of Worms
 
         while True:
             turn_count += 1
