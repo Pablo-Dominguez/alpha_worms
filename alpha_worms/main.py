@@ -86,8 +86,18 @@ class Worms:
             next_s = game.get_next_state(state, action)
             
             # Link the history for the NEXT step's canonicalization
-            next_s.previous_dto = state 
-            
+            next_s.previous_dto = state
+
+            # FIX (memory): truncate the live state chain to T frames. Without this,
+            # `state` retains every prior turn's DTO (and each one keeps a depth-T
+            # canonical history), causing O(turns) RAM growth per game per worker.
+            _node = next_s
+            for _ in range(5):
+                if _node.previous_dto is None:
+                    break
+                _node = _node.previous_dto
+            _node.previous_dto = None
+
             turn_switched = next_s.board_map.current_player != state.board_map.current_player
             state = next_s
 
@@ -182,7 +192,9 @@ class Worms:
 
     def load_history(self):
         """
-        Loads all previous self-play games from the history folder into the deque.
+        Loads previous self-play games from the history folder into the deque.
+        FIX (memory/disk): only load the most recent N iterations so RAM and
+        startup time don't grow unboundedly across hundreds of iterations.
         """
         history_folder = os.path.join(self.args['checkpoint'], "history")
         if not os.path.exists(history_folder):
@@ -190,8 +202,13 @@ class Worms:
             return
 
         print("Loading history from disk... This might take a moment.")
-        # Sort files so we load them chronologically
-        files = sorted([f for f in os.listdir(history_folder) if f.endswith(".pkl")])
+        # Sort files so we load them chronologically and keep only the newest N.
+        max_history_files = self.args.get('max_history_files', 50)
+        all_files = sorted([f for f in os.listdir(history_folder) if f.endswith(".pkl")])
+        files = all_files[-max_history_files:] if max_history_files > 0 else all_files
+        skipped = len(all_files) - len(files)
+        if skipped > 0:
+            print(f"Skipping {skipped} old history files (keeping last {len(files)}).")
         
         loaded_moves = 0
         for file in files:
@@ -494,6 +511,14 @@ class Worms:
                     )
                     p.start()
                     processes.append(p)
+                # FIX (correctness): close the parent's copy of the child pipe ends
+                # right after spawning. Otherwise a crashed worker never causes EOF
+                # on the parent side, and child_pipe fds leak across the iteration.
+                for c_pipe in child_pipes:
+                    try:
+                        c_pipe.close()
+                    except OSError:
+                        pass
 
                 _log_mp_state("after_worker_start", processes=processes, request_queue=request_queue)
 
@@ -545,6 +570,7 @@ class Worms:
                                     p.join(timeout=5)
                                     if p.is_alive():
                                         p.kill()
+                                        p.join(timeout=3)
                             raise RuntimeError("Silent deadlock detected: workers hung for >70s")
                         continue
                     except Exception as e:
@@ -573,6 +599,7 @@ class Worms:
                     if p.is_alive():
                         logger.warning(f"Process {p.pid} did not terminate cleanly. Killing...")
                         p.kill()
+                        p.join(timeout=3)
                 _log_mp_state("after_process_terminate", processes=processes, request_queue=request_queue)
                 # Drain any items left in the queue before closing.  Workers that were
                 # terminated mid-flight may have partially written DATA/DONE/inference
@@ -657,10 +684,15 @@ class Worms:
         """
         Samples a batch from the buffer and trains the NN.
         """
+        # FIX (CPU): snapshot the deque once. random.sample on a deque is O(n)
+        # because deques don't support random access, so it internally converts
+        # to a list every epoch — with 20 epochs over a 50k buffer that's 1M
+        # element copies per iteration.
+        snapshot = list(self.train_data)
         for epoch in range(epochs):
             # We sample a random batch to break the correlation between consecutive moves
-            batch_size = min(len(self.train_data), self.args['batch_size'])
-            batch = random.sample(self.train_data, batch_size)
+            batch_size = min(len(snapshot), self.args['batch_size'])
+            batch = random.sample(snapshot, batch_size)
             # need to order the batch examples and convert them to tensor history
             # The predictor.train method we built previously expects a list of examples
             # and handles the tensor conversion itself.
@@ -691,15 +723,26 @@ class Worms:
             level=logging.INFO,
             format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
         )
+        # Spawned workers start with a fresh interpreter: add a FileHandler so
+        # their logger.* output goes to the same log file as the main process.
+        # basicConfig only adds a StreamHandler (stderr); without this, worker
+        # logs are invisible in the file when stderr is not redirected.
+        _log_file = args.get('log_file', 'gpu_test_output.log')
+        _root = logging.getLogger()
+        if not any(isinstance(_h, logging.FileHandler) for _h in _root.handlers):
+            _wfh = logging.FileHandler(_log_file, mode='a', encoding='utf-8')
+            _wfh.setLevel(logging.DEBUG)
+            _wfh.setFormatter(
+                logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+            )
+            _root.addHandler(_wfh)
         # 1. Create the fake predictor
         proxy_nnet = IPCPredictorProxy(worker_id, request_queue, worker_pipe)
 
         # Each worker gets its own CPU-based tensor engine for DTO conversion
         from alpha_worms.reflex_endpoint.tensor_engine import TensorEngine
         local_tensor_engine = TensorEngine()
-        
-        worker_train_data = []
-        
+
         try:
             for game_num in range(1, num_games + 1):
                 # 2. Initialize a fresh MCTS for this game using the PROXY
@@ -709,31 +752,41 @@ class Worms:
                 # uses this specific 'mcts' instance! 
                 # Example: game_history = self.execute_episode(mcts)
                 game_history = Worms.execute_episode(game, mcts=mcts,tensor_engine=local_tensor_engine)
-                
-                worker_train_data.extend(game_history)
-                
+
+                # FIX (memory): ship each game's tensors immediately instead of
+                # accumulating all games in `worker_train_data` and pickling them
+                # in one ~10 MB+ IPC blob at worker exit. This keeps worker RSS
+                # roughly flat across games and avoids OOM spikes on small-RAM hosts.
+                request_queue.put(("DATA", game_history))
+                examples_sent = len(game_history)
+                del game_history
+                # Drop the MCTS tree (Ps/Qsa/Nsa/Ns/Es/Vs) before the next game.
+                del mcts
+                gc.collect()
+
                 # FIX 5: Heartbeat logging every 5 games
                 if game_num % 5 == 0:
-                    logger.info(f"Worker {worker_id} progress: {game_num}/{num_games} games, {len(worker_train_data)} examples")
+                    logger.info(f"Worker {worker_id} progress: {game_num}/{num_games} games, last_game_examples={examples_sent}")
                 else:
                     print(f"Worker {worker_id} completed game {game_num}/{num_games}")
-                
-            # 3. Game over! Send the training data to the Chef
-            request_queue.put(("DATA", worker_train_data))
-            logger.info(f"Worker {worker_id} finished: sent {len(worker_train_data)} training examples")
-            
+
+            logger.info(f"Worker {worker_id} finished: sent all {num_games} games via streaming DATA")
+
         except Exception as e:
             logger.error(f"Worker {worker_id} crashed with error: {e}")
-            request_queue.put(("DATA", worker_train_data))
-        
-        # --- FIX 4: FREE WORKER MEMORY IMMEDIATELY ---
-        worker_train_data = []
-        gc.collect()  # Explicitly free memory
-        
+
+        # --- FREE WORKER MEMORY BEFORE EXIT ---
+        gc.collect()
+
         # 4. Tell the Chef this worker is clocking out
         logger.info(f"Worker {worker_id} sending DONE")
         request_queue.put("DONE")
         logger.info(f"Worker {worker_id} DONE sent, worker exiting")
+        # Release the queue's 3 POSIX semaphores from this process before exit.
+        # Without close()+join_thread(), the feeder thread keeps them alive and
+        # the resource_tracker reports "3 leaked semaphore objects" at shutdown.
+        request_queue.close()
+        request_queue.join_thread()
         
 class ArenaPredictorProxy:
     """

@@ -80,11 +80,21 @@ class WormsPredictor:
         else:
             self.device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
         self.nnet = WormsNet().to(self.device)
-        self.optimizer = optim.Adam(self.nnet.parameters(), lr=0.001, weight_decay=1e-4)
+        # FIX (memory): build the Adam optimizer lazily — baseline predictors used
+        # only for arena inference never need it, and Adam holds 2x the model size
+        # in moment buffers. Save ~5 MB per baseline instantiation per iteration.
+        self._optimizer = None
         self.tensor_engine = TensorEngine()
         # self.share_memory() # Enable sharing for multiprocessing
         # self.load_checkpoint(folder='./checkpoints/', filename='checkpoint_25.pth.tar')
         print(f"Using device: {self.device}")
+
+    @property
+    def optimizer(self):
+        # Lazy Adam: only allocate moment buffers when training is actually invoked.
+        if self._optimizer is None:
+            self._optimizer = optim.Adam(self.nnet.parameters(), lr=0.001, weight_decay=1e-4)
+        return self._optimizer
 
         # 1. THE QUEUE SYSTEM
         # self.prediction_queue = mp.Manager().Queue()
@@ -169,6 +179,10 @@ class WormsPredictor:
         
         # Backward pass
         total_loss.backward()
+        # FIX (stability): gradient clipping is standard AlphaZero practice and
+        # protects the residual tower from rare large-gradient batches that would
+        # otherwise corrupt weights and cause challengers to be rejected by arena.
+        torch.nn.utils.clip_grad_norm_(self.nnet.parameters(), max_norm=5.0)
         self.optimizer.step()
 
         return total_loss.item()

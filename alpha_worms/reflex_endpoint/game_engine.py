@@ -210,22 +210,31 @@ class GameEngine(RawEngine):
         Total: 25 moves
         """
 
-        dice_map, board_map = game_dto.dice_map.model_dump(), game_dto.board_map.model_dump()
+        # FIX (memory/CPU): use direct attribute access instead of model_dump(),
+        # which allocates several throwaway nested dicts per call. This method
+        # is hit on every MCTS expansion and every tensor encode.
+        dice_map = game_dto.dice_map
+        board_map = game_dto.board_map
 
         total_selected = self.get_total_selected(game_dto)
-        other_player = 2 if board_map["current_player"] == 1 else 1
+        other_player = 2 if board_map.current_player == 1 else 1
+
+        selected_dices = dice_map.selected_dices
+        grey_out_dices = dice_map.grey_out_dices
 
         ## Get allowed dices
-        dice_moves = [0 if (x in dice_map["selected_dices"] or dice_map["grey_out_dices"]) else 1 for x in dice_map["dices"]]
+        dice_moves = [0 if (x in selected_dices or grey_out_dices) else 1 for x in dice_map.dices]
 
         ## Check if can roll again
-        roll_again = [dice_map['grey_out_dices']]
+        roll_again = [grey_out_dices]
 
         ## Get allowed pieces
-        last_piece_opp_stack = board_map[f"player0{other_player}_stack"][-1] if board_map[f"player0{other_player}_stack"] else -1
-        
+        opp_stack = board_map.player02_stack if other_player == 2 else board_map.player01_stack
+        last_piece_opp_stack = opp_stack[-1] if opp_stack else -1
+        board_pieces = board_map.board_pieces
+
         piece_moves = [1 if (
-            (x in board_map["board_pieces"] and  x <= total_selected) or
+            (x in board_pieces and  x <= total_selected) or
             (x == last_piece_opp_stack and x == total_selected)
             ) else 0 for x in range(21,37)]
 
@@ -287,10 +296,12 @@ class GameEngine(RawEngine):
 
         return canonical_dto
 
-    def _get_canonical_history(self, dto: GameDTO, swap: bool, max_depth: int = 7) -> GameDTO:
+    def _get_canonical_history(self, dto: GameDTO, swap: bool, max_depth: int = 5) -> GameDTO:
         """
         Iterative helper to maintain the swap state down the history chain.
         Prevents RecursionError and limits history depth to save memory and CPU.
+        max_depth is matched to TensorEngine.to_temporal_tensor's T=5: keeping
+        deeper frames is wasted RAM since they're never read.
         """
         if dto is None:
             return None

@@ -6,6 +6,7 @@ import torch.multiprocessing as mp
 import time
 import glob
 import os
+import logging
 
 # MUST BE AT THE TOP: Prevents CPU thrashing in the workers
 torch.set_num_threads(1)
@@ -37,6 +38,17 @@ if __name__ == '__main__':
 
     cleanup_leaked_semaphores()
 
+    # Route all logger.* calls to both the console AND the log file.
+    # logging writes to stderr by default; without a FileHandler it is
+    # missing from the log when only stdout is redirected (> file).
+    _LOG_FILE = 'gpu_test_output.log'
+    _file_handler = logging.FileHandler(_LOG_FILE, mode='a', encoding='utf-8')
+    _file_handler.setLevel(logging.DEBUG)
+    _file_handler.setFormatter(
+        logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+    )
+    logging.getLogger().addHandler(_file_handler)
+
     # 1. Initialize Game and Brain
     game = GameEngine() 
     # predictor = WormsPredictor()
@@ -51,6 +63,7 @@ if __name__ == '__main__':
         'batch_size': 256,        # GPU can handle large batches (much faster training)
         'max_buffer_size': 50000, # Large buffer to prevent catastrophic forgetting
         'checkpoint': './checkpoints/',
+        'log_file': 'gpu_test_output.log',
         'train_epochs': 20,        # Spend more time optimizing each batch on GPU
         'arenaCompare': 20,        # Number of arena games for model validation
         'arenaThreshold': 0.55,    # Challenger must win at least 55% of arena games

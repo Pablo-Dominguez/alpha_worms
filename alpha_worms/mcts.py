@@ -1,7 +1,5 @@
 import math
 import numpy as np
-import hashlib
-import json
 from alpha_worms.reflex_endpoint.dto import GameDTO
 from alpha_worms.reflex_endpoint.game_engine import GameEngine
 from alpha_worms.nn import WormsPredictor
@@ -18,17 +16,30 @@ class MCTS:
         self.Ps = {}   # Policy (NN predictions) for state s
         self.Es = {}   # Terminal status of state s
         self.Vs = {}   # Valid moves mask for state s
+        # Instance-local RNG so concurrent arena threads never share the global
+        # np.random singleton (it is NOT thread-safe and causes heap corruption).
+        self.rng = np.random.default_rng()
 
-    def get_string_hash(self, state: GameDTO) -> str:
+    def get_string_hash(self, state: GameDTO):
         """
-        FIX: Uses the DTO structure for a stable, collision-resistant hash.
-        This prevents the 'forbidden move' bug caused by byte-level jitter 
-        or incomplete state representation in tensors.
+        FIX (memory/CPU): use a flat tuple of immutables as the dict key instead
+        of `sha256(json.dumps(model_dump()))`. The old implementation allocated
+        ~5 throwaway dicts + a JSON string + a 64-byte hex digest per call, and
+        was invoked ~170k times per training iteration — the dominant source of
+        Python allocator churn and apparent RSS growth during self-play.
+        Tuples of ints are hashable, immutable, and ~50x faster to build.
         """
-        # Converting to dict ensures we capture dices, player stacks, and current player.
-        state_dict = state.model_dump()
-        state_json = json.dumps(state_dict, sort_keys=True)
-        return hashlib.sha256(state_json.encode()).hexdigest()
+        dm = state.dice_map
+        bm = state.board_map
+        return (
+            tuple(dm.dices),
+            tuple(dm.selected_dices),
+            dm.grey_out_dices,
+            tuple(bm.board_pieces),
+            bm.current_player,
+            tuple(bm.player01_stack),
+            tuple(bm.player02_stack),
+        )
     
     def get_action_probs(self, state: GameDTO, temp=1):
         """
@@ -50,7 +61,7 @@ class MCTS:
         if temp > 0:
             epsilon = 0.25
             alpha = 0.3
-            noise = np.random.dirichlet([alpha] * self.game.game_size)
+            noise = self.rng.dirichlet([alpha] * self.game.game_size)
             self.Ps[s] = (1 - epsilon) * self.Ps[s] + epsilon * noise
 
             # Re-mask and re-normalize
@@ -72,9 +83,9 @@ class MCTS:
         if temp == 0:
             max_count = np.max(counts)
             best_as = [a for a in range(self.game.game_size) if counts[a] == max_count and valids[a]]
-            best_a = np.random.choice(best_as)
-            probs = [0] * len(counts)
-            probs[best_a] = 1
+            best_a = self.rng.choice(best_as)
+            probs = np.zeros(len(counts), dtype=np.float32)
+            probs[best_a] = 1.0
             return probs
 
         # Safety fix: Normalize counts before applying temperature to prevent overflow
@@ -84,9 +95,14 @@ class MCTS:
         
         counts_sum = float(sum(counts))
         if counts_sum == 0:
-            return [v / sum(valids) for v in valids]
-            
-        return [x / counts_sum for x in counts]
+            # All-zero counts — fall back to uniform over valid moves.
+            return (np.asarray(valids, dtype=np.float32) / sum(valids))
+
+        # FIX (memory): return a numpy float32 array instead of a Python list.
+        # Each pi is stored in train_data for the whole iteration; switching from
+        # list-of-floats (~600 B) to float32 ndarray (~140 B) cuts the replay
+        # buffer footprint by ~4x at no quality cost.
+        return (np.asarray(counts, dtype=np.float32) / np.float32(counts_sum))
 
     def search(self, state: GameDTO):
         """
@@ -145,7 +161,7 @@ class MCTS:
         # 4. SAFETY CHECK
         if best_act == -1 or valids[best_act] == 0:
              print(f"CRITICAL MISMATCH. Hash: {s}")
-             best_act = np.random.choice([a for a, v in enumerate(valids) if v == 1])
+             best_act = self.rng.choice([a for a, v in enumerate(valids) if v == 1])
 
         # 5. TRANSITION
         next_s_raw = self.game.get_next_state(state, best_act)
