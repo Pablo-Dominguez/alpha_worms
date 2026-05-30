@@ -56,6 +56,26 @@ def _log_mp_state(tag, processes=None, request_queue=None):
         f"tracked_processes={proc_state} | queue_qsize={qsize_info}"
     )
 
+def _history_sort_key(filename):
+    """
+    Numeric sort key for history pkl files so load_history and save_iteration_data
+    always process them in true chronological order.
+
+    Format: iteration_{N}_{YYYYMMDD}_{HHMMSS}.pkl
+    Lexicographic (default) sort is wrong: "iteration_9_..." > "iteration_40_..."
+    because '9' > '4', so the 'last N' slice would load old small-iteration data
+    instead of the most-recent iterations.
+    """
+    parts = filename.replace('.pkl', '').split('_')
+    try:
+        iter_n = int(parts[1])
+        # Timestamp suffix (YYYYMMDD_HHMMSS) sorts correctly as a string within
+        # the same iteration number (handles duplicate pkl files from restarts).
+        timestamp = '_'.join(parts[2:]) if len(parts) > 2 else ''
+        return (iter_n, timestamp)
+    except (IndexError, ValueError):
+        return (-1, filename)
+
 class Worms:
     def __init__(self, game: GameEngine, nnet: WormsPredictor, args):
         self.game = game
@@ -202,9 +222,13 @@ class Worms:
             return
 
         print("Loading history from disk... This might take a moment.")
-        # Sort files so we load them chronologically and keep only the newest N.
+        # Sort files numerically by iteration number so the 'last N' slice
+        # keeps the most-recent iterations, not the lexicographically-largest ones.
         max_history_files = self.args.get('max_history_files', 50)
-        all_files = sorted([f for f in os.listdir(history_folder) if f.endswith(".pkl")])
+        all_files = sorted(
+            [f for f in os.listdir(history_folder) if f.endswith(".pkl")],
+            key=_history_sort_key
+        )
         files = all_files[-max_history_files:] if max_history_files > 0 else all_files
         skipped = len(all_files) - len(files)
         if skipped > 0:
@@ -425,6 +449,15 @@ class Worms:
             prev_state = state
             state = game.get_next_state(state, action)
             state.previous_dto = prev_state
+            # Truncate the DTO history chain to T=5 frames. Without this,
+            # the chain grows 200 nodes deep over a max-turns arena game,
+            # pinning ~30-50 MB per arena thread (4 concurrent = ~200 MB).
+            _node = state
+            for _ in range(5):
+                if _node.previous_dto is None:
+                    break
+                _node = _node.previous_dto
+            _node.previous_dto = None
 
             winner = game.get_winner(state)
             if winner != 0:
@@ -653,6 +686,27 @@ class Worms:
             checkpoint_name = f'checkpoint_{i}.pth.tar'
             self.nnet.save_checkpoint(folder=self.args['checkpoint'], filename=checkpoint_name)
 
+            # Prune old per-iteration checkpoint files to cap disk usage over long
+            # runs (500 iters x ~5 MB each = ~2.5 GB without pruning).
+            # checkpoint_best.pth.tar is always preserved regardless.
+            _keep = self.args.get('keep_last_checkpoints', 20)
+            if _keep > 0:
+                _cf = self.args['checkpoint']
+                _all_ckpts = sorted(
+                    [f for f in os.listdir(_cf)
+                     if f.startswith('checkpoint_') and f.endswith('.pth.tar')
+                     and f != 'checkpoint_best.pth.tar'],
+                    key=lambda f: int(f.split('_')[1].split('.')[0])
+                    if f.split('_')[1].split('.')[0].isdigit() else -1
+                )
+                for _old in _all_ckpts[:-_keep]:
+                    try:
+                        os.remove(os.path.join(_cf, _old))
+                    except OSError:
+                        pass
+                if len(_all_ckpts) > _keep:
+                    logger.info(f"Pruned {len(_all_ckpts) - _keep} old checkpoint file(s).")
+
             if baseline_predictor is not None:
                 challenger_passed = self.arena_compare(self.nnet, baseline_predictor)
                 if challenger_passed:
@@ -679,6 +733,22 @@ class Worms:
         with open(filename, "wb") as f:
             pickle.dump(data, f)
         print(f"Successfully saved {len(data)} moves to {filename}")
+        # Prune old history files so disk usage stays bounded over a long run.
+        # Uses the same max_history_files cap as load_history.
+        max_history_files = self.args.get('max_history_files', 50)
+        if max_history_files > 0:
+            all_pkls = sorted(
+                [f for f in os.listdir(folder) if f.endswith(".pkl")],
+                key=_history_sort_key
+            )
+            to_delete = all_pkls[:-max_history_files]
+            for old_file in to_delete:
+                try:
+                    os.remove(os.path.join(folder, old_file))
+                except OSError:
+                    pass
+            if to_delete:
+                logger.info(f"Pruned {len(to_delete)} old history pkl(s) from {folder}")
 
     def train_network(self, epochs=1):
         """
@@ -846,4 +916,6 @@ class IPCPredictorProxy:
                 raise TimeoutError(f"Pipe communication timeout after {self.pipe_timeout}s")
         except Exception as e:
             logger.error(f"Worker {self.worker_id}: Pipe error: {e}")
+            raise  # Never silently return None — MCTS receives (None, None) and
+                   # crashes with a confusing TypeError instead of this clear message.
             raise
