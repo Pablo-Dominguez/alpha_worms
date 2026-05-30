@@ -50,7 +50,19 @@ class MCTS:
         # 1. Ensure the root node is expanded before we add noise
         if s not in self.Ps:
             self.search(state) 
-            
+
+        # Defensive guard: if the root is a terminal state, search() returns the
+        # terminal value without populating Ps[s]/Vs[s]. Callers should detect
+        # terminal states before invoking MCTS, but if one slips through, return
+        # a uniform-over-valids policy instead of KeyError-crashing the worker.
+        if s not in self.Ps:
+            valids = self.game.get_allowed_moves(state)
+            valids_arr = np.asarray(valids, dtype=np.float32)
+            valids_sum = valids_arr.sum()
+            if valids_sum > 0:
+                return valids_arr / valids_sum
+            return np.ones(self.game.game_size, dtype=np.float32) / self.game.game_size
+
         # 2. Add Dirichlet Noise to the Root — only during training (temp > 0).
         # Arena evaluation uses temp=0 and must play deterministically; applying noise
         # corrupts PUCT selection for both models equally, producing more draws, fewer

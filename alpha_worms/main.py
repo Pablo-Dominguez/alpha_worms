@@ -126,6 +126,17 @@ class Worms:
 
             reward = game.get_winner(state)
 
+            # FIX (correctness): a tied terminal state (board empty, equal worm sums)
+            # returns reward=0 from get_winner, so the loop would call MCTS on a
+            # terminal state with no valid moves. MCTS.search() correctly returns the
+            # terminal value without populating Ps[s]/Vs[s], so the subsequent
+            # `self.Ps[s] *= valids` in get_action_probs raises KeyError and the
+            # worker dies. That was the cause of all the "Worker N crashed with
+            # error: ((...),(),0,(),1,(...),(...))" messages in the log.
+            if reward == 0 and game.is_terminal(state):
+                reward = 1e-5  # tied terminal -> treat as draw
+                print(f"Game ended in tied terminal at turn {turn_count}.")
+
             # 4. Check for a forced draw if the game drags on too long
             if turn_count >= max_turns and reward == 0:
                 # Use the point calculation to see who was winning
@@ -464,6 +475,14 @@ class Worms:
                 if challenger_goes_second:
                     return -winner  # Invert because challenger is P2
                 return winner
+
+            # FIX (correctness): same tied-terminal trap as in execute_episode.
+            # Without this, the loop continues and the next MCTS call crashes
+            # the arena thread on KeyError(Ps[s]), which the outer try/except
+            # in arena_compare silently counts as a draw -- but only after
+            # blocking ~120 s on TimeoutError. Massive arena slowdown source.
+            if game.is_terminal(state):
+                return 0  # tied terminal -> draw
 
             if turn_count >= max_turns:
                 score_winner = game.get_score_winner(state)
