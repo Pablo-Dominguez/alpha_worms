@@ -116,12 +116,13 @@ class RawEngine:
         current_stack = old_pieces_version.player02_stack if old_pieces_version.current_player == 2 else old_pieces_version.player01_stack
         opp_stack = old_pieces_version.player01_stack if old_pieces_version.current_player == 2 else old_pieces_version.player02_stack
         if piece_number in current_stack and piece_number == current_stack[-1]:
-            # Place the piece on the board
+            # Fail: return player's top piece to the board, then always remove
+            # the highest board piece (Heckmeck rule).  The returned piece may
+            # itself become the highest — it is still removed in that case.
             current_stack.remove(piece_number)
             old_pieces_version.board_pieces.append(piece_number)
             old_pieces_version.board_pieces.sort()
-            if old_pieces_version.board_pieces[-1] != piece_number:
-                old_pieces_version.board_pieces = old_pieces_version.board_pieces[:-1]
+            old_pieces_version.board_pieces = old_pieces_version.board_pieces[:-1]
         elif piece_number in opp_stack and piece_number == opp_stack[-1]:
             # Steal the piece from the opponent's stack
             opp_stack.remove(piece_number)

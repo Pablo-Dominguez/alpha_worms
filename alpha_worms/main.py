@@ -337,7 +337,7 @@ class Worms:
 
         # Multi-threaded arena evaluation using ThreadPoolExecutor
         from concurrent.futures import ThreadPoolExecutor, as_completed
-        num_workers = min(arena_games, 4)  # Limit to 4 threads to avoid GPU overload
+        num_workers = min(arena_games, max(1, mp.cpu_count() - 2))  # Scale with available CPUs
         
         results = []
         try:

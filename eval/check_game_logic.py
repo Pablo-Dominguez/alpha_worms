@@ -37,8 +37,12 @@ def check_turn(match_id: str, turn_num: int, raw: str) -> list[str]:
     errors  = []
     prefix  = f"match={match_id[:8]}… turn={turn_num}"
 
-    # Strip :LIMIT suffix left by the turn-limit path in execute_episode
-    turn_str = raw.removesuffix(":LIMIT") if raw.endswith(":LIMIT") else raw
+    # Strip :LIMIT suffix left by the turn-limit path in execute_episode.
+    # is_limit=True means the turn was cut off by the game step-limit — a
+    # terminal action is expected to be absent, so we must not report that
+    # as an error.  Roll steps that *are* present are still validated.
+    is_limit = raw.endswith(":LIMIT")
+    turn_str = raw.removesuffix(":LIMIT") if is_limit else raw
     if not turn_str:
         return errors  # empty mid-turn at game limit — nothing to validate
 
@@ -49,7 +53,7 @@ def check_turn(match_id: str, turn_num: int, raw: str) -> list[str]:
     roll_steps = [a for a in actions if not a.startswith(":")]
 
     # ── 1. Basic structure ──────────────────────────────────────────────────
-    if not terminal:
+    if not terminal and not is_limit:
         errors.append(f"{prefix}: no terminal action found in '{turn_str}'")
     if not roll_steps:
         errors.append(f"{prefix}: no R(...)K(...) roll steps in '{turn_str}'")
