@@ -96,7 +96,7 @@ class Worms:
 
             canonical_state = game.get_canonical_form(state)
             # Use temp=1 for the first 30 moves, then temp=0.2 to sharpen the policy
-            temp = 1 if turn_count < 30 else 0.1
+            temp = 1
             pi = mcts.get_action_probs(canonical_state, temp=temp)
             
             # Store the DTO temporarily during the game
@@ -447,7 +447,7 @@ class Worms:
         
         state = game.get_initial_state()
         turn_count = 0
-        max_turns = 200
+        max_turns = 250
 
         while True:
             turn_count += 1
@@ -576,7 +576,8 @@ class Worms:
 
                 active_workers = num_workers
                 requests_batch = []
-                worker_timeout = 60
+                worker_timeout = 5       # Short: flush partial batches quickly to avoid pipe_timeout race
+                deadlock_threshold = 70  # True deadlock only after prolonged inactivity
                 last_activity_time = datetime.now()
 
                 logger.info(f"Started {num_workers} CPU workers. GPU Batching server listening...")
@@ -606,7 +607,10 @@ class Worms:
                             logger.info(f"Flushing {len(requests_batch)} pending inference requests on idle queue.")
                             policies, values = self.nnet.predict_batch(states)
                             for idx, w_id in enumerate(worker_ids):
-                                parent_pipes[w_id].send((policies[idx], values[idx]))
+                                try:
+                                    parent_pipes[w_id].send((policies[idx], values[idx]))
+                                except BrokenPipeError:
+                                    logger.warning(f"Worker {w_id} pipe broken (already exited), dropping response.")
                             requests_batch = []
                             last_activity_time = datetime.now()
                             continue
@@ -614,7 +618,7 @@ class Worms:
                         time_elapsed = (datetime.now() - last_activity_time).total_seconds()
                         logger.warning(f"No worker activity for {time_elapsed}s. Active workers: {active_workers}")
 
-                        if time_elapsed > worker_timeout + 10:
+                        if time_elapsed > deadlock_threshold:
                             logger.critical(f"Silent deadlock detected! Terminating {len(processes)} worker processes.")
                             for p in processes:
                                 if p.is_alive():
@@ -635,7 +639,10 @@ class Worms:
                         logger.debug(f"Processing GPU batch with {len(requests_batch)} requests")
                         policies, values = self.nnet.predict_batch(states)
                         for idx, w_id in enumerate(worker_ids):
-                            parent_pipes[w_id].send((policies[idx], values[idx]))
+                            try:
+                                parent_pipes[w_id].send((policies[idx], values[idx]))
+                            except BrokenPipeError:
+                                logger.warning(f"Worker {w_id} pipe broken (already exited), dropping response.")
                         requests_batch = []
 
             finally:
@@ -907,7 +914,7 @@ class IPCPredictorProxy:
         self.worker_id = worker_id
         self.request_queue = request_queue
         self.worker_pipe = worker_pipe
-        self.pipe_timeout = 60  # FIX 1: 60-second timeout for pipe communication
+        self.pipe_timeout = 120  # FIX 1: 120-second timeout for pipe communication
 
         from alpha_worms.reflex_endpoint.tensor_engine import TensorEngine
         self.tensor_engine = TensorEngine()

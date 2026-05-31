@@ -59,15 +59,19 @@ if __name__ == '__main__':
         'numMCTSSims': 80,        # Increased: Higher quality moves, still fast on CPU workers
         'cpuct': 1.41,            # Classic AlphaZero constant for exploration
         'num_iterations': 50,    # Run as many as possible in 24h
-        'num_episodes': 20,       # More games per iteration for a richer replay buffer
+        'num_episodes': 14,       # More games per iteration for a richer replay buffer
+        # 'num_episodes': 20,       # More games per iteration for a richer replay buffer
         'batch_size': 256,        # GPU can handle large batches (much faster training)
         'max_buffer_size': 50000, # Large buffer to prevent catastrophic forgetting
         'checkpoint': './checkpoints/',
         'log_file': 'gpu_test_output.log',
         'train_epochs': 20,        # Spend more time optimizing each batch on GPU
-        'arenaCompare': 33,        # Number of arena games for model validation
+        'arenaCompare': 15,        # Number of arena games for model validation
+        # 'arenaCompare': 33,        # Number of arena games for model validation
         'arenaThreshold': 0.55,    # Challenger must win at least 55% of arena games
-        'arenaSimMultiplier': 2,   # Arena uses 2x the self-play MCTS sims
+        'arenaSimMultiplier': 1,   # Arena uses 2x the self-play MCTS sims
+        # 'arenaSimMultiplier': 2,   # Arena uses 2x the self-play MCTS sims
+
     }
 
     # 3. Initialize the Trainer
