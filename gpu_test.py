@@ -11,6 +11,10 @@ import logging
 # MUST BE AT THE TOP: Prevents CPU thrashing in the workers
 torch.set_num_threads(1)
 
+# Default DB for game recording (worms_logger). Only applies if DATABASE_URL
+# is not already set in the environment — export it externally to override.
+os.environ.setdefault("DATABASE_URL", "sqlite:///./nn_game_records.db")
+
 
 def cleanup_leaked_semaphores():
     """

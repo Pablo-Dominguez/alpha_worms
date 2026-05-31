@@ -84,7 +84,7 @@ class Worms:
         self.train_data = deque(maxlen=args.get('max_buffer_size', 50000))
 
     @staticmethod
-    def execute_episode(game, mcts=None, tensor_engine=None):
+    def execute_episode(game, mcts=None, tensor_engine=None, game_recorder=None):
         train_examples = []
         state = game.get_initial_state()
         curr_player = 1 
@@ -104,7 +104,11 @@ class Worms:
 
             action = np.random.choice(len(pi), p=pi)
             next_s = game.get_next_state(state, action)
-            
+
+            # Record this step to the database (no-op if game_recorder is None)
+            if game_recorder is not None:
+                game_recorder.step(state, action, next_s)
+
             # Link the history for the NEXT step's canonicalization
             next_s.previous_dto = state
 
@@ -148,6 +152,9 @@ class Worms:
                 print(f"Game hit turn limit ({max_turns})! Winner by points: {reward}")
 
             if reward != 0:
+                if game_recorder is not None:
+                    game_recorder.finish(reward)
+
                 # --- THE FIX: Convert to Tensors and break links ---
                 final_examples = []
                 for hist_state_dto, hist_pi, hist_player in train_examples:
@@ -840,14 +847,20 @@ class Worms:
         local_tensor_engine = TensorEngine()
 
         try:
+            import random as _random
+            from alpha_worms.game_recorder import GameRecorder
             for game_num in range(1, num_games + 1):
+                # Record ~0.1% of games (1 in 1000) chosen independently per game.
+                recorder = GameRecorder.create() if _random.random() < 0.001 else None
+
                 # 2. Initialize a fresh MCTS for this game using the PROXY
                 mcts = MCTS(game, proxy_nnet, args)
-                
+
                 # NOTE: You will need to ensure your self.execute_episode() 
                 # uses this specific 'mcts' instance! 
                 # Example: game_history = self.execute_episode(mcts)
-                game_history = Worms.execute_episode(game, mcts=mcts,tensor_engine=local_tensor_engine)
+                game_history = Worms.execute_episode(game, mcts=mcts, tensor_engine=local_tensor_engine,
+                                                     game_recorder=recorder)
 
                 # FIX (memory): ship each game's tensors immediately instead of
                 # accumulating all games in `worker_train_data` and pickling them
@@ -856,6 +869,9 @@ class Worms:
                 request_queue.put(("DATA", game_history))
                 examples_sent = len(game_history)
                 del game_history
+                # Release recorder before gc.collect() so the SQLAlchemy engine
+                # is not kept alive by this reference during collection.
+                del recorder
                 # Drop the MCTS tree (Ps/Qsa/Nsa/Ns/Es/Vs) before the next game.
                 del mcts
                 gc.collect()
@@ -870,6 +886,11 @@ class Worms:
 
         except Exception as e:
             logger.error(f"Worker {worker_id} crashed with error: {e}")
+            # Finalize any in-progress DB recording so the match row is not
+            # left as 'ongoing'.  finish() is idempotent — safe if already called.
+            _rec = locals().get('recorder')
+            if _rec is not None:
+                _rec.finish(0)
 
         # --- FREE WORKER MEMORY BEFORE EXIT ---
         gc.collect()
