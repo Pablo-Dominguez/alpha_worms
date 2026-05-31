@@ -232,10 +232,13 @@ class GameEngine(RawEngine):
         opp_stack = board_map.player02_stack if other_player == 2 else board_map.player01_stack
         last_piece_opp_stack = opp_stack[-1] if opp_stack else -1
         board_pieces = board_map.board_pieces
+        has_worm = 6 in selected_dices  # Heckmeck rule: must have committed at least one worm face
 
         piece_moves = [1 if (
-            (x in board_pieces and  x <= total_selected) or
-            (x == last_piece_opp_stack and x == total_selected)
+            has_worm and (
+                (x in board_pieces and x <= total_selected) or
+                (x == last_piece_opp_stack and x == total_selected)
+            )
             ) else 0 for x in range(21,37)]
 
         return piece_moves + dice_moves + roll_again

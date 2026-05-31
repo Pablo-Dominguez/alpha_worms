@@ -314,6 +314,14 @@ class Worms:
         gpu_usage = self.check_gpu_memory_usage()
         if gpu_usage is not None:
             logger.info(f"GPU memory usage before arena: {gpu_usage:.1f}%")
+        try:
+            with open('/proc/self/status') as _f:
+                for _line in _f:
+                    if _line.startswith('VmRSS:'):
+                        logger.info(f"RAM (RSS) before arena: {_line.strip()}")
+                        break
+        except OSError:
+            pass
 
         arena_args = self.args.copy()
         arena_args['numMCTSSims'] = int(self.args.get('numMCTSSims', 80) * sim_multiplier)
@@ -332,15 +340,6 @@ class Worms:
         num_workers = min(arena_games, 4)  # Limit to 4 threads to avoid GPU overload
         
         results = []
-        # Set stack size before executor so game threads get 32 MB.
-        # Initialise old_stack_size to 0 (= "use platform default") so the
-        # finally block is safe to call even if stack_size() raises.
-        import threading as _threading
-        old_stack_size = 0
-        try:
-            old_stack_size = _threading.stack_size(32 * 1024 * 1024)
-        except (RuntimeError, ValueError):
-            pass  # Platform doesn't support custom stack size; 8 MB default is fine
         try:
             # Each arena thread must have its own GameEngine to avoid sharing the
             # global NumPy RandomState (legacy np.random is NOT thread-safe and
@@ -359,8 +358,6 @@ class Worms:
                         logger.error(f"Arena game failed with exception: {e}. Counting as draw.")
                         results.append(0)
         finally:
-            # Restore the original stack size so we don't affect other thread pools.
-            _threading.stack_size(old_stack_size)
             # Always stop the batching thread — even if a future raises an exception
             # (e.g. TimeoutError from the 120s proxy timeout), so it doesn't spin forever.
             arena_queue.put("STOP")
@@ -540,15 +537,6 @@ class Worms:
         for i in range(start_iter + 1, start_iter + self.args['num_iterations'] + 1):
             print(f"\n--- Iteration {i} ---")
             
-            baseline_predictor = None
-            if self.args.get('arenaCompare', 0) > 0:
-                best_path = self.get_best_checkpoint_path()
-                if os.path.exists(best_path):
-                    baseline_predictor = WormsPredictor(device='cpu')
-                    baseline_predictor.load_checkpoint(folder=self.args['checkpoint'], filename='checkpoint_best.pth.tar', load_optimizer=False)
-                else:
-                    print("No baseline best checkpoint found yet. First candidate will become the baseline automatically.")
-
             num_episodes = self.args['num_episodes']
             num_workers = min(num_episodes, max(1, mp.cpu_count() - 2))
             
@@ -740,22 +728,26 @@ class Worms:
                 if len(_all_ckpts) > _keep:
                     logger.info(f"Pruned {len(_all_ckpts) - _keep} old checkpoint file(s).")
 
-            if baseline_predictor is not None:
-                challenger_passed = self.arena_compare(self.nnet, baseline_predictor)
-                if challenger_passed:
-                    self.save_best_checkpoint(checkpoint_name, i)
-                else:
-                    print("Reloading baseline model after arena rejection.")
-                    best_path = self.get_best_checkpoint_path()
-                    if os.path.exists(best_path):
+            if self.args.get('arenaCompare', 0) > 0:
+                best_path = self.get_best_checkpoint_path()
+                if os.path.exists(best_path):
+                    # Load baseline just-in-time so its weights are NOT resident in RAM
+                    # during the ~30-min self-play + training phase (saves one full model copy).
+                    baseline_predictor = WormsPredictor(device='cpu')
+                    baseline_predictor.load_checkpoint(folder=self.args['checkpoint'], filename='checkpoint_best.pth.tar', load_optimizer=False)
+                    challenger_passed = self.arena_compare(self.nnet, baseline_predictor)
+                    if challenger_passed:
+                        self.save_best_checkpoint(checkpoint_name, i)
+                    else:
+                        print("Reloading baseline model after arena rejection.")
                         self.nnet.load_checkpoint(folder=self.args['checkpoint'], filename='checkpoint_best.pth.tar')
-                del baseline_predictor
-                gc.collect()
-                if torch.cuda.is_available():
-                    torch.cuda.empty_cache()
-            elif self.args.get('arenaCompare', 0) > 0:
-                # first accepted model becomes the baseline
-                self.save_best_checkpoint(checkpoint_name, i)
+                    del baseline_predictor
+                    gc.collect()
+                    if torch.cuda.is_available():
+                        torch.cuda.empty_cache()
+                else:
+                    # No baseline yet — first accepted model becomes the baseline.
+                    self.save_best_checkpoint(checkpoint_name, i)
     
     def save_iteration_data(self, iteration, data):
         folder = os.path.join(self.args['checkpoint'], "history")
@@ -850,8 +842,9 @@ class Worms:
             import random as _random
             from alpha_worms.game_recorder import GameRecorder
             for game_num in range(1, num_games + 1):
-                # Record ~0.1% of games (1 in 1000) chosen independently per game.
-                recorder = GameRecorder.create() if _random.random() < 0.001 else None
+                # Record ~5% of games chosen independently per game.
+                # At 14 games/iter this gives ~51% chance of at least one recording per iter.
+                recorder = GameRecorder.create() if _random.random() < 0.05 else None
 
                 # 2. Initialize a fresh MCTS for this game using the PROXY
                 mcts = MCTS(game, proxy_nnet, args)
