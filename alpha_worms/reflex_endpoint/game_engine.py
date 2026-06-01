@@ -40,9 +40,9 @@ class RawEngine:
         p1_stack = game_dto.board_map.player01_stack
         p2_stack = game_dto.board_map.player02_stack
         
-        # Your existing point logic
-        p1_sum = sum([(p - 21) // 4 for p in p1_stack])
-        p2_sum = sum([(p - 21) // 4 for p in p2_stack])
+        # Worm count per piece: 21-24 = 1, 25-28 = 2, 29-32 = 3, 33-36 = 4
+        p1_sum = sum([(p - 21) // 4 + 1 for p in p1_stack])
+        p2_sum = sum([(p - 21) // 4 + 1 for p in p2_stack])
         
         if p1_sum > p2_sum: return 1
         if p2_sum > p1_sum: return -1
@@ -189,6 +189,10 @@ class RawEngine:
                 piece_to_drop = player_stack[-1]
                 return self.fetch_from_stack(GameDTO(dice_map=new_dices_version, board_map=new_pieces_version, previous_dto=None), piece_to_drop)
             else:
+                # Heckmeck rule: the highest board tile is always removed on a bust,
+                # even when the player has no tile to return.
+                if new_pieces_version.board_pieces:
+                    new_pieces_version.board_pieces = new_pieces_version.board_pieces[:-1]
                 return self.end_turn(GameDTO(dice_map=new_dices_version, board_map=new_pieces_version, previous_dto=None))
         else:
             return GameDTO(dice_map=new_dices_version, board_map=new_pieces_version, previous_dto=None)
