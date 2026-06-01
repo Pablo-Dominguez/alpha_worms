@@ -84,8 +84,15 @@ class MCTS:
             else:
                 self.Ps[s] = valids / np.sum(valids)
 
-        # 3. Run the rest of the MCTS Simulations
-        for i in range(self.args['numMCTSSims'] - 1):
+        # 3. Run the rest of the MCTS Simulations.
+        # FIX (correctness): when the root was already in Ps from a prior turn's
+        # tree (a common occurrence in a dice game where MCTS pre-explores many
+        # reachable futures), step 1 above was skipped and only numMCTSSims-1
+        # additional simulations ran.  The fix: run a full numMCTSSims sims when
+        # the root was pre-expanded, and numMCTSSims-1 otherwise (since step 1
+        # already ran one sim for the fresh-root case).
+        n_sims = self.args['numMCTSSims'] - (1 if s not in self.Ns else 0)
+        for i in range(n_sims):
             self.search(state)
 
         # 4. Calculate Action Probabilities

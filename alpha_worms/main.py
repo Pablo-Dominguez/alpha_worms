@@ -95,8 +95,9 @@ class Worms:
             turn_count += 1
 
             canonical_state = game.get_canonical_form(state)
-            # Use temp=1 for the first 30 moves, then temp=0.2 to sharpen the policy
-            temp = 1
+            # Use temp=1 for the first 30 moves then temp=0 (greedy) to sharpen
+            # the policy in the endgame, matching standard AlphaZero practice.
+            temp = 1 if turn_count <= 30 else 0
             pi = mcts.get_action_probs(canonical_state, temp=temp)
             
             # Store the DTO temporarily during the game
@@ -138,7 +139,11 @@ class Worms:
             # worker dies. That was the cause of all the "Worker N crashed with
             # error: ((...),(),0,(),1,(...),(...))" messages in the log.
             if reward == 0 and game.is_terminal(state):
-                reward = 1e-5  # tied terminal -> treat as draw
+                # FIX (consistency): MCTS.search() uses 1e-4 as the sentinel
+                # for a tied terminal.  Using a different constant here (1e-5)
+                # meant training targets were ~10x smaller than MCTS values for
+                # draws, creating a slight systematic bias.
+                reward = 1e-4  # unified draw sentinel — matches MCTS Es[s]
                 print(f"Game ended in tied terminal at turn {turn_count}.")
 
             # 4. Check for a forced draw if the game drags on too long
@@ -146,9 +151,9 @@ class Worms:
                 # Use the point calculation to see who was winning
                 reward = game.get_score_winner(state)
                 
-                # If it's a dead tie on points, use a tiny value to represent a draw
+                # If it's a dead tie on points, use the unified draw sentinel
                 if reward == 0:
-                    reward = 1e-5
+                    reward = 1e-4  # matches MCTS Es[s] draw sentinel
                 print(f"Game hit turn limit ({max_turns})! Winner by points: {reward}")
 
             if reward != 0:
@@ -242,7 +247,7 @@ class Worms:
         print("Loading history from disk... This might take a moment.")
         # Sort files numerically by iteration number so the 'last N' slice
         # keeps the most-recent iterations, not the lexicographically-largest ones.
-        max_history_files = self.args.get('max_history_files', 50)
+        max_history_files = self.args.get('max_history_files', 10)
         all_files = sorted(
             [f for f in os.listdir(history_folder) if f.endswith(".pkl")],
             key=_history_sort_key
@@ -510,7 +515,10 @@ class Worms:
         os.environ.setdefault('OMP_NUM_THREADS', '1')
         os.environ.setdefault('MKL_NUM_THREADS', '1')
 
-        os.nice(10)
+        try:
+            os.nice(10)
+        except (PermissionError, OSError):
+            pass  # Restricted container or non-Linux — low priority is nice-to-have
         if self.nnet is None:
             from alpha_worms.nn import WormsPredictor
             self.nnet = WormsPredictor()
@@ -675,8 +683,14 @@ class Worms:
                 request_queue.join_thread()
                 logger.info("request_queue.join_thread() complete")
                 for p_pipe, c_pipe in zip(parent_pipes, child_pipes):
-                    p_pipe.close()
-                    c_pipe.close()
+                    try:
+                        p_pipe.close()
+                    except OSError:
+                        pass
+                    try:
+                        c_pipe.close()  # may already be closed (we close() right after spawn)
+                    except OSError:
+                        pass
                 logger.info("All pipe endpoints closed")
                 _log_mp_state("cleanup_end", processes=processes, request_queue=request_queue)
 
@@ -689,14 +703,9 @@ class Worms:
                 print(f"Training on {len(self.train_data)} moves...")
                 self.train_network(epochs=self.args.get('train_epochs', 10))
             
-            # FIX 3: Replay Buffer Capping & Garbage Collection
+            # deque(maxlen=...) enforces the cap automatically on every extend/append;
+            # an explicit trim loop here can never fire and is dead code.
             logger.info(f"Current train_data buffer size: {len(self.train_data)}")
-            max_buffer_size = self.args.get('max_buffer_size', 50000)
-            if len(self.train_data) > max_buffer_size:
-                # Trim buffer to maximum size (deque maxlen should handle this, but explicit check)
-                while len(self.train_data) > max_buffer_size:
-                    self.train_data.popleft()
-                logger.info(f"Trimmed buffer to {len(self.train_data)} examples")
             
             # Explicitly call garbage collection and CUDA cache clearing
             gc.collect()
@@ -760,7 +769,7 @@ class Worms:
         print(f"Successfully saved {len(data)} moves to {filename}")
         # Prune old history files so disk usage stays bounded over a long run.
         # Uses the same max_history_files cap as load_history.
-        max_history_files = self.args.get('max_history_files', 50)
+        max_history_files = self.args.get('max_history_files', 10)
         if max_history_files > 0:
             all_pkls = sorted(
                 [f for f in os.listdir(folder) if f.endswith(".pkl")],
@@ -809,7 +818,6 @@ class Worms:
         FIX 3: Added timeout to pipe.recv() to detect parent crash.
         FIX 5: Added heartbeat logging every 5 games.
         """
-        import time
         import torch as _torch
         _torch.set_num_threads(1)  # Prevent OpenMP explosion inside each worker process
         # Configure logging — logging.basicConfig() from the parent is NOT inherited by spawned
@@ -958,4 +966,3 @@ class IPCPredictorProxy:
             logger.error(f"Worker {self.worker_id}: Pipe error: {e}")
             raise  # Never silently return None — MCTS receives (None, None) and
                    # crashes with a confusing TypeError instead of this clear message.
-            raise

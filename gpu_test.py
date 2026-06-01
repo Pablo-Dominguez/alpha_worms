@@ -57,25 +57,36 @@ if __name__ == '__main__':
     game = GameEngine() 
     # predictor = WormsPredictor()
 
-    # 2. Define STRESS TEST Hyperparameters for RTX 3050 Ti
+    # 2. Hyperparameters — Local (RTX 3050 Ti, 16-core CPU)
+    #
+    # Storage budget (100 iters, 14 eps/iter, ~100 moves avg):
+    #   - Each history pkl  ≈ 14 × 100 × 35 KB ≈  49 MB
+    #   - keep_last_checkpoints=5  → 5 × ~5 MB  ≈  25 MB  (+ 1 best = ~30 MB total)
+    #   - max_history_files=5      → 5 × 49 MB  ≈ 245 MB
+    #   - Replay buffer (RAM only) = max_buffer_size × 35 KB
+    #     20000 entries ≈ 684 MB RAM  (50000 entries ≈ 1.7 GB RAM)
+    #
+    # For cloud (32 cores, 28 eps/iter):
+    #   - Each history pkl  ≈ 28 × 100 × 35 KB ≈  98 MB
+    #   - max_history_files=5  → ~490 MB history disk
+    #   - keep_last_checkpoints=3  → ~15 MB iteration checkpoints
     args = {
-        'lr': 0.001,             # reduce this if plateu of loss function 
-        'numMCTSSims': 80,        # Increased: Higher quality moves, still fast on CPU workers
-        'cpuct': 1.41,            # Classic AlphaZero constant for exploration
-        'num_iterations': 50,    # Run as many as possible in 24h
-        'num_episodes': 14,       # More games per iteration for a richer replay buffer
-        # 'num_episodes': 20,       # More games per iteration for a richer replay buffer
-        'batch_size': 256,        # GPU can handle large batches (much faster training)
-        'max_buffer_size': 50000, # Large buffer to prevent catastrophic forgetting
+        'lr': 0.001,                 # reduce if loss plateaus
+        'numMCTSSims': 80,           # MCTS simulations per move
+        'cpuct': 1.41,               # PUCT exploration constant
+        'num_iterations': 50,        # iterations per run
+        'num_episodes': 14,          # self-play games/iter (≤ cpu_count - 2)
+        'batch_size': 256,           # training mini-batch size
+        'max_buffer_size': 20000,    # replay buffer cap (RAM: 20k × 35 KB ≈ 684 MB)
         'checkpoint': './checkpoints/',
         'log_file': 'gpu_test_output.log',
-        'train_epochs': 20,        # Spend more time optimizing each batch on GPU
-        'arenaCompare': 15,        # Number of arena games for model validation
-        # 'arenaCompare': 33,        # Number of arena games for model validation
-        'arenaThreshold': 0.55,    # Challenger must win at least 55% of arena games
-        'arenaSimMultiplier': 1,   # Arena uses 2x the self-play MCTS sims
-        # 'arenaSimMultiplier': 2,   # Arena uses 2x the self-play MCTS sims
-
+        'train_epochs': 20,          # gradient steps per iteration
+        'arenaCompare': 15,          # arena games per iteration
+        'arenaThreshold': 0.55,      # challenger win-rate to promote
+        'arenaSimMultiplier': 1,     # arena MCTS multiplier (1 = same as self-play)
+        # --- Storage safety knobs ---
+        'keep_last_checkpoints': 5,  # per-iteration .pth.tar files to keep on disk
+        'max_history_files': 5,      # pkl history files to keep (older ones auto-pruned)
     }
 
     # 3. Initialize the Trainer

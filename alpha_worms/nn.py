@@ -126,7 +126,8 @@ class WormsPredictor:
         actual_device = next(self.nnet.parameters()).device
         state_tensor = torch.as_tensor(state, device=actual_device, dtype=torch.float32).unsqueeze(0)
 
-        self.nnet.eval() # Set to evaluation mode
+        if self.nnet.training:   # only pay the mode-switch cost when needed
+            self.nnet.eval()
         with torch.no_grad():
             pi, v = self.nnet(state_tensor)
 
@@ -218,13 +219,15 @@ class WormsPredictor:
 
         # Load the file from disk
         actual_device = next(self.nnet.parameters()).device
-        checkpoint = torch.load(filepath, map_location=actual_device)
+        # weights_only=True prevents arbitrary code execution during unpickling
+        # (checkpoints contain only tensors + Python primitives, so this is safe).
+        checkpoint = torch.load(filepath, map_location=actual_device, weights_only=True)
         
         # Here are the built-in PyTorch methods being used:
         self.nnet.load_state_dict(checkpoint['state_dict'])
         
         # With:
-        if load_optimizer:
+        if load_optimizer and 'optimizer' in checkpoint:
             self.optimizer.load_state_dict(checkpoint['optimizer'])
         print(f"Model loaded from {filepath}")
     
@@ -278,7 +281,8 @@ class WormsPredictor:
         actual_device = next(self.nnet.parameters()).device
         batch_tensor = torch.as_tensor(np.array(encoded_states), device=actual_device, dtype=torch.float32)
         # 2. Standard GPU Inference
-        self.nnet.eval()
+        if self.nnet.training:   # only pay the mode-switch cost when needed
+            self.nnet.eval()
         with torch.no_grad():
             pi, v = self.nnet(batch_tensor)
             

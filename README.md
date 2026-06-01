@@ -40,7 +40,15 @@ Default config (RTX 3050 Ti, 16-core CPU):
 | `arenaCompare` | 15 | arena games per iteration |
 | `arenaThreshold` | 0.55 | challenger win-rate to pass |
 | `batch_size` | 256 | training batch size |
-| `max_buffer_size` | 50000 | replay buffer capacity |
+| `max_buffer_size` | 20000 | replay buffer cap (RAM: ~684 MB) |
+| `keep_last_checkpoints` | 5 | per-iteration `.pth.tar` files kept on disk |
+| `max_history_files` | 5 | history `.pkl` files kept on disk |
+
+**Storage budget per run** (14 eps/iter, ~100 moves avg):
+- Each history pkl ≈ 49 MB → 5 files ≈ 245 MB
+- Per-iteration checkpoints: 5 × ~5 MB ≈ 25 MB
+- `checkpoint_best.pth.tar`: ~5 MB (always kept)
+- **Total disk: < 300 MB** regardless of run length
 
 Expected speed: **~22–24 min/iter** (self-play ~15 min + arena ~6–8 min + training ~1–2 min).
 
@@ -57,15 +65,20 @@ Recommended config changes in `gpu_test.py` for a 32-core instance:
 'num_iterations': 100,   # longer run
 'num_episodes': 28,      # fill the extra cores (cpu_count - 2)
 'arenaCompare': 20,      # more arena games, still affordable with all threads
-'max_buffer_size': 100000,
+'max_buffer_size': 20000,        # RAM cap: ~684 MB (each example is ~35 KB)
+'keep_last_checkpoints': 3,      # only 3 × ~5 MB = ~15 MB of iteration files
+'max_history_files': 5,          # 5 × ~98 MB = ~490 MB history (28 eps/iter)
 ```
+
+> **Storage note (32 cores)**: each history pkl is ≈ 98 MB (28 eps × 100 moves × 35 KB).
+> Five files = ~490 MB. Total cloud disk including checkpoints: **< 600 MB**.
 
 Setup on the cloud instance (use a PyTorch base image with CUDA + Python 3.12):
 
 ```bash
 pip install poetry
 rsync -avz --exclude='checkpoints/' --exclude='*.db' --exclude='.venv/' \
-    <local>:/home/ubuntu/projects/alpha_worms/ ./alpha_worms/
+    <local>:/home/pablo/Documents/projects/alpha_worms/ ./alpha_worms/
 cd alpha_worms && poetry install
 python -u gpu_test.py 2>&1 | tee gpu_test_output.log
 ```
@@ -79,7 +92,84 @@ python -u gpu_test.py 2>&1 | tee gpu_test_output.log
 After training, sync back just the checkpoint:
 
 ```bash
-rsync cloud:~/alpha_worms/checkpoints/checkpoint_best.pth.tar ./checkpoints/
+rsync -avz --progress \
+    <user@host>:~/alpha_worms/checkpoints/checkpoint_best.pth.tar \
+    ./checkpoints/
+```
+
+## Extracting the Best Model from Vast.ai
+
+### Check disk usage before downloading
+
+```bash
+# How much disk is the run using?
+ssh <user@host> "du -sh ~/alpha_worms/checkpoints/ ~/alpha_worms/checkpoints/history/"
+
+# Quick view of what's there
+ssh <user@host> "ls -lh ~/alpha_worms/checkpoints/*.pth.tar | sort -V"
+```
+
+### Download only what you need (zero storage waste)
+
+`checkpoint_best.pth.tar` is the only file you need locally — it is the arena-validated
+best model and is ~5 MB. Download it and nothing else:
+
+```bash
+rsync -avz --progress \
+    <user@host>:~/alpha_worms/checkpoints/checkpoint_best.pth.tar \
+    ./checkpoints/checkpoint_best.pth.tar
+```
+
+To also grab the training log:
+
+```bash
+rsync -avz --progress \
+    <user@host>:~/alpha_worms/gpu_test_output.log \
+    ./gpu_test_output.log
+```
+
+### If the run was interrupted
+
+If training was killed mid-iteration, `checkpoint_best.pth.tar` still exists and is
+**always** the safest checkpoint — it is only overwritten when a challenger passes the
+arena, so it is never left in a half-written state.
+
+To also grab the last fully-written per-iteration checkpoint (which may be newer than
+the best but has not yet been arena-validated):
+
+```bash
+# 1. List checkpoints on the remote to find the latest
+ssh <user@host> "ls -lh ~/alpha_worms/checkpoints/checkpoint_*.pth.tar | sort -V"
+
+# 2. Download the best (arena-validated) model — always safe
+rsync -avz --progress \
+    <user@host>:~/alpha_worms/checkpoints/checkpoint_best.pth.tar \
+    ./checkpoints/checkpoint_best.pth.tar
+
+# 3. Optionally download the latest iteration checkpoint too
+rsync -avz --progress \
+    <user@host>:~/alpha_worms/checkpoints/checkpoint_<N>.pth.tar \
+    ./checkpoints/
+```
+
+> **Do NOT rsync the entire `checkpoints/` folder** — history pkl files are large
+> (up to ~100 MB each) and are only needed to resume training on the same instance.
+> The single `checkpoint_best.pth.tar` file is sufficient to resume or evaluate locally.
+
+### Resuming from a downloaded checkpoint
+
+Place the downloaded file in `checkpoints/` as `checkpoint_best.pth.tar`.
+Training will automatically resume from the last saved iteration number:
+
+```bash
+python -u gpu_test.py 2>&1 | tee gpu_test_output.log
+```
+
+To start fully fresh (discard all prior training), remove the checkpoint files:
+
+```bash
+rm -f checkpoints/checkpoint_best.pth.tar checkpoints/checkpoint_*.pth.tar
+rm -f checkpoints/history/*.pkl checkpoints/best_iteration.txt
 ```
 
 ## Arena — How Challenger Promotion Works

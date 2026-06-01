@@ -101,9 +101,11 @@ class RawEngine:
                 current_stack.append(piece_number)
                 new_pieces_version.player02_stack = current_stack
 
-            # If no more board pieces, end game
-            if self.is_terminal(game_dto):
-                winner = self.get_winner(game_dto)
+            # If no more board pieces, log that the game is over.
+            # NOTE: check new_pieces_version (after removal), not old game_dto.
+            if len(new_pieces_version.board_pieces) == 0:
+                tmp_dto = GameDTO(dice_map=old_dice_model, board_map=new_pieces_version)
+                winner = self.get_score_winner(tmp_dto)
                 print(f"Player {winner} wins! Game over.")
             
             return self.end_turn(GameDTO(dice_map=old_dice_model, board_map=new_pieces_version, previous_dto=None))
@@ -231,7 +233,10 @@ class GameEngine(RawEngine):
         dice_moves = [0 if (x in selected_dices or grey_out_dices) else 1 for x in dice_map.dices]
 
         ## Check if can roll again
-        roll_again = [grey_out_dices]
+        # Blocked when available_dices is empty: throw_dices with no dice available
+        # produces zero new faces and immediately triggers a bust.  Allowing action 24
+        # in this state is a guaranteed self-loss that pollutes the MCTS action space.
+        roll_again = [grey_out_dices if dice_map.available_dices else 0]
 
         ## Get allowed pieces
         opp_stack = board_map.player02_stack if other_player == 2 else board_map.player01_stack
