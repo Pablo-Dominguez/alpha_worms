@@ -2,39 +2,17 @@
 from pydantic import BaseModel, Field
 import numpy as np
 
+def rand_dices():
+    return [int(x) for x in np.random.default_rng().integers(1, 7, size=8)]
 
 class Dices(BaseModel):
-    dices: list[int] = Field(
-        default=[int(x) for x in np.random.randint(1, 7, size=8)],
-        description="List of all dice values available in the game."
-    )
-    available_dices: list[int] = Field(
-        default=[0,1,2,3,4,5,6,7],
-        description="List of available dice indices that can be used in the current turn."
-    )
-    selected_dices: list[int] = Field(
-        default=[],
-        description="List of selected dice values in the current turn."
-    )
-    grey_out_dices: int = Field(
-        default=0,
-        description="Indicates whether the dices are greyed out (not usable)."
-    )
+    dices: list[int] = Field(default_factory=rand_dices)
+    available_dices: list[int] = Field(default_factory=lambda: [0,1,2,3,4,5,6,7])
+    selected_dices: list[int] = Field(default_factory=list)
+    grey_out_dices: int = Field(default=0)
 
 class Pieces(BaseModel):
-    board_pieces: list[int] = Field(
-        default=list(range(21, 37)),
-        description="List of pieces currently on the board."
-    )
-    current_player: int = Field(
-        default=1,
-        description="Indicates the current player."
-    )
-    player01_stack: list[int] = Field(
-        default=[],
-        description="Pieces in player 1's stack."
-    )
-    player02_stack: list[int] = Field(
-        default=[],
-        description="Pieces in player 2's stack."
-    )
+    board_pieces: list[int] = Field(default_factory=lambda: list(range(21, 37)))
+    current_player: int = Field(default=1)
+    player01_stack: list[int] = Field(default_factory=list)
+    player02_stack: list[int] = Field(default_factory=list)

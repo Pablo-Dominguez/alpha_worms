@@ -10,8 +10,8 @@ from PIL import Image, ImageDraw
 
 class TensorEngine:
     def __init__(self):
-        
-        pass
+        self._game_engine = GameEngine()  # ← create once
+
 
     def to_tensor(self, game_dto: GameDTO):
         # Initialize the tensor: 33 slots, 55 feature layers
@@ -48,7 +48,7 @@ class TensorEngine:
         tensor[54, :] = game_dto.board_map.current_player - 1
         # Game history features can be added here as needed 
 
-        available_pieces = GameEngine().get_allowed_moves(game_dto)[:16]
+        available_pieces = self._game_engine.get_allowed_moves(game_dto)[:16]
         # --- POPULATE PIECE FEATURES ---
         for piece_number in range(21, 37):
             # 1. Piece locations
@@ -70,6 +70,35 @@ class TensorEngine:
             tensor[32 + i, :] = new_layer
 
         return tensor
+    
+    def to_temporal_tensor(self, current_dto: GameDTO, T=5):
+        """
+        Climbs the GameDTO 'previous_dto' tree to build a stacked history.
+        """
+        history = []
+        temp_dto = current_dto
+        
+        # Collect up to T historical DTOs
+        while temp_dto is not None and len(history) < T:
+            history.append(temp_dto)
+            temp_dto = temp_dto.previous_dto
+            
+        # Now we have [Current, Prev, Prev-Prev...]
+        # We call your existing to_tensor for each one
+        layers = []
+        current_tensor_cache = None
+        for i in range(T):
+            if i < len(history):
+                single_tensor = self.to_tensor(history[i])
+                if i == 0:
+                    current_tensor_cache = single_tensor
+                layers.append(single_tensor[:54, :])
+            else:
+                layers.append(np.zeros((54, 33), dtype=np.float32))
+
+        history_stack = np.concatenate(layers, axis=0)
+        current_turn = current_tensor_cache[54:55, :]  # reuse, no second call
+        return np.concatenate([history_stack, current_turn], axis=0)
 
     def to_pillow_heatmap(self, tensor):
 

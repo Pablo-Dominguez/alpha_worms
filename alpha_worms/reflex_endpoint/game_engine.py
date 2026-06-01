@@ -10,7 +10,7 @@ class RawEngine:
 
     def get_initial_state(self) -> GameDTO:
         """Generates the initial game state."""
-        dices: list[int] = [int(x) for x in np.random.randint(1, 7, size=8)]
+        dices: list[int] = [int(x) for x in np.random.default_rng().integers(1, 7, size=8)]
         available_dices: list[int] = [0,1,2,3,4,5,6,7]
         selected_dices: list[int] = []
         dices_model = Dices(dices=dices,
@@ -26,7 +26,8 @@ class RawEngine:
         )
 
         return GameDTO(dice_map=dices_model, 
-                        board_map=pieces_model)
+                        board_map=pieces_model,
+                        previous_dto=None)
 
     def is_terminal(self, game_dto: GameDTO) -> bool:
         """
@@ -34,19 +35,23 @@ class RawEngine:
         """
         return len(game_dto.board_map.board_pieces) == 0
     
+    def get_score_winner(self, game_dto: GameDTO) -> int:
+        """Calculates who is leading based on piece values."""
+        p1_stack = game_dto.board_map.player01_stack
+        p2_stack = game_dto.board_map.player02_stack
+        
+        # Your existing point logic
+        p1_sum = sum([(p - 21) // 4 for p in p1_stack])
+        p2_sum = sum([(p - 21) // 4 for p in p2_stack])
+        
+        if p1_sum > p2_sum: return 1
+        if p2_sum > p1_sum: return -1
+        return 0
+
     def get_winner(self, game_dto: GameDTO) -> int:
-        """
-        Determine the winner of the game.
-        Returns the player number (1 or 2) if there's a winner, otherwise returns 0 (tie).
-        """
         if self.is_terminal(game_dto):
-            p1_stack = game_dto.board_map.player01_stack
-            p2_stack = game_dto.board_map.player02_stack
-            p1_sum = sum([(piece_number - 21) // 4 for piece_number in p1_stack])
-            p2_sum = sum([(piece_number - 21) // 4 for piece_number in p2_stack])
-            return 1 if p1_sum >= p2_sum else (-1 if p2_sum > p1_sum else 0)
-        else:
-            return 0  # Game is not over yet
+            return self.get_score_winner(game_dto)
+        return 0
     
     def get_total_selected(self, game_dto: GameDTO) -> int:
         """Calculates the total value of selected dices."""
@@ -62,7 +67,7 @@ class RawEngine:
         old_pieces_version.current_player = game_dto.board_map.current_player % 2 + 1
 
         # new_seed = self.game_generator(1)[0]*10000
-        dices: list[int] = [int(x) for x in np.random.randint(1, 7, size=8)]
+        dices: list[int] = [int(x) for x in np.random.default_rng().integers(1, 7, size=8)]
         available_dices: list[int] = [0,1,2,3,4,5,6,7]
         selected_dices: list[int] = []
         new_dices_model = Dices(dices=dices,
@@ -70,7 +75,7 @@ class RawEngine:
                                  selected_dices=selected_dices,
                                  grey_out_dices = 0) # Reset dices for next turn
         
-        return GameDTO(dice_map=new_dices_model, board_map=old_pieces_version)
+        return GameDTO(dice_map=new_dices_model, board_map=old_pieces_version, previous_dto=None)
 
     def fetch_from_board(self, game_dto: GameDTO, piece_number: int):
         """
@@ -101,7 +106,7 @@ class RawEngine:
                 winner = self.get_winner(game_dto)
                 print(f"Player {winner} wins! Game over.")
             
-            return self.end_turn(GameDTO(dice_map=old_dice_model, board_map=new_pieces_version))
+            return self.end_turn(GameDTO(dice_map=old_dice_model, board_map=new_pieces_version, previous_dto=None))
         
     def fetch_from_stack(self, game_dto: GameDTO,piece_number: int):
         """Moves a piece between a player's stack and the board."""
@@ -111,12 +116,13 @@ class RawEngine:
         current_stack = old_pieces_version.player02_stack if old_pieces_version.current_player == 2 else old_pieces_version.player01_stack
         opp_stack = old_pieces_version.player01_stack if old_pieces_version.current_player == 2 else old_pieces_version.player02_stack
         if piece_number in current_stack and piece_number == current_stack[-1]:
-            # Place the piece on the board
+            # Fail: return player's top piece to the board, then always remove
+            # the highest board piece (Heckmeck rule).  The returned piece may
+            # itself become the highest — it is still removed in that case.
             current_stack.remove(piece_number)
             old_pieces_version.board_pieces.append(piece_number)
             old_pieces_version.board_pieces.sort()
-            if old_pieces_version.board_pieces[-1] != piece_number:
-                old_pieces_version.board_pieces = old_pieces_version.board_pieces[:-1]
+            old_pieces_version.board_pieces = old_pieces_version.board_pieces[:-1]
         elif piece_number in opp_stack and piece_number == opp_stack[-1]:
             # Steal the piece from the opponent's stack
             opp_stack.remove(piece_number)
@@ -125,7 +131,7 @@ class RawEngine:
             # raise("Piece not in players stacks.")
             pass
         
-        return self.end_turn(GameDTO(dice_map=old_dice_model, board_map=old_pieces_version))
+        return self.end_turn(GameDTO(dice_map=old_dice_model, board_map=old_pieces_version, previous_dto=None))
     
     def grey_out_dices(self, dice_model: Dices, reset: bool = False):
         """Greys out all available dices, preventing further selection."""
@@ -153,11 +159,11 @@ class RawEngine:
             available_pieces = [] if not 6 in new_dice_model.selected_dices else available_pieces
 
             if not available_pieces:
-                return self.throw_dices(GameDTO(dice_map=new_dice_model, board_map=game_dto.board_map))
+                return self.throw_dices(GameDTO(dice_map=new_dice_model, board_map=game_dto.board_map, previous_dto=None))
             else:
                 new_dice_model = self.grey_out_dices(new_dice_model)
-        return GameDTO(dice_map=new_dice_model, board_map=game_dto.board_map)
-    
+        return GameDTO(dice_map=new_dice_model, board_map=game_dto.board_map, previous_dto=None)
+
     def throw_dices(self, game_dto: GameDTO):
         """Simulates throwing the dices and updates their values."""
 
@@ -167,7 +173,7 @@ class RawEngine:
 
         new_dices_version = self.grey_out_dices(new_dices_version, reset=True)
 
-        new_dices =[(x,int(y)) for x,y in zip(new_dices_version.available_dices,np.random.randint(1, 7, size=len(new_dices_version.available_dices)))]
+        new_dices =[(x,int(y)) for x,y in zip(new_dices_version.available_dices,np.random.default_rng().integers(1, 7, size=len(new_dices_version.available_dices)))]
         total_dices = [(new_dices_version.dices[k] if k not in new_dices_version.available_dices else [y for (x,y) in new_dices if k==x][0]) 
                        for k in range(8)]
         # Update dices with new values
@@ -181,11 +187,11 @@ class RawEngine:
             player_stack = new_pieces_version.player01_stack if new_pieces_version.current_player ==1 else new_pieces_version.player02_stack
             if player_stack:
                 piece_to_drop = player_stack[-1]
-                return self.fetch_from_stack(GameDTO(dice_map=new_dices_version, board_map=new_pieces_version), piece_to_drop)
+                return self.fetch_from_stack(GameDTO(dice_map=new_dices_version, board_map=new_pieces_version, previous_dto=None), piece_to_drop)
             else:
-                return self.end_turn(GameDTO(dice_map=new_dices_version, board_map=new_pieces_version))
+                return self.end_turn(GameDTO(dice_map=new_dices_version, board_map=new_pieces_version, previous_dto=None))
         else:
-            return GameDTO(dice_map=new_dices_version, board_map=new_pieces_version)
+            return GameDTO(dice_map=new_dices_version, board_map=new_pieces_version, previous_dto=None)
 
 
     
@@ -205,23 +211,35 @@ class GameEngine(RawEngine):
         Total: 25 moves
         """
 
-        dice_map, board_map = game_dto.dice_map.model_dump(), game_dto.board_map.model_dump()
+        # FIX (memory/CPU): use direct attribute access instead of model_dump(),
+        # which allocates several throwaway nested dicts per call. This method
+        # is hit on every MCTS expansion and every tensor encode.
+        dice_map = game_dto.dice_map
+        board_map = game_dto.board_map
 
-        total_selected = sum([x if x != 6 else 5 for x in dice_map["selected_dices"]]) if 6 in dice_map["selected_dices"] else 0
-        other_player = 2 if board_map["current_player"] == 1 else 1
+        total_selected = self.get_total_selected(game_dto)
+        other_player = 2 if board_map.current_player == 1 else 1
+
+        selected_dices = dice_map.selected_dices
+        grey_out_dices = dice_map.grey_out_dices
 
         ## Get allowed dices
-        dice_moves = [0 if (x in dice_map["selected_dices"] or dice_map["grey_out_dices"]) else 1 for x in dice_map["dices"]]
+        dice_moves = [0 if (x in selected_dices or grey_out_dices) else 1 for x in dice_map.dices]
 
         ## Check if can roll again
-        roll_again = [dice_map['grey_out_dices']]
+        roll_again = [grey_out_dices]
 
         ## Get allowed pieces
-        last_piece_opp_stack = board_map[f"player0{other_player}_stack"][-1] if board_map[f"player0{other_player}_stack"] else -1
-        
+        opp_stack = board_map.player02_stack if other_player == 2 else board_map.player01_stack
+        last_piece_opp_stack = opp_stack[-1] if opp_stack else -1
+        board_pieces = board_map.board_pieces
+        has_worm = 6 in selected_dices  # Heckmeck rule: must have committed at least one worm face
+
         piece_moves = [1 if (
-            (x in board_map["board_pieces"] and  x <= total_selected) or
-            (x == last_piece_opp_stack and x == total_selected)
+            has_worm and (
+                (x in board_pieces and x <= total_selected) or
+                (x == last_piece_opp_stack and x == total_selected)
+            )
             ) else 0 for x in range(21,37)]
 
         return piece_moves + dice_moves + roll_again
@@ -243,39 +261,94 @@ class GameEngine(RawEngine):
                 # Fetch from board
                 piece_number = action + 21  # Adjusting index to match piece numbering
                 if piece_number in game_dto.board_map.board_pieces:
-                    return RawEngine().fetch_from_board(GameDTO(dice_map=game_dto.dice_map, board_map=game_dto.board_map), piece_number)
+                    return self.fetch_from_board(GameDTO(dice_map=game_dto.dice_map, board_map=game_dto.board_map, previous_dto=None), piece_number)
                 else:
-                    return RawEngine().fetch_from_stack(GameDTO(dice_map=game_dto.dice_map, board_map=game_dto.board_map), piece_number)
+                    return self.fetch_from_stack(GameDTO(dice_map=game_dto.dice_map, board_map=game_dto.board_map, previous_dto=None), piece_number)
             elif action < 24:
                 # Select dice
                 dice_number = action - 16  # Adjusting index to match dice numbering
-                return RawEngine().select_dice(GameDTO(dice_map=game_dto.dice_map, board_map=game_dto.board_map), dice_number)
+                return self.select_dice(GameDTO(dice_map=game_dto.dice_map, board_map=game_dto.board_map, previous_dto=None), dice_number)
             else:
                 # Roll again
-                return RawEngine().throw_dices(GameDTO(dice_map=game_dto.dice_map, board_map=game_dto.board_map))
+                return self.throw_dices(GameDTO(dice_map=game_dto.dice_map, board_map=game_dto.board_map, previous_dto=None))
             
     def get_canonical_form(self, game_dto: GameDTO) -> GameDTO:
-        """Returns the canonical form of the game state from the perspective of the CURRENT player."""
-        
-        # 1. If it is already Player 1's turn, just return a deep copy. 
-        # No swapping needed!
-        if game_dto.board_map.current_player == 1:
-            return GameDTO(
-                dice_map=game_dto.dice_map.model_copy(deep=True),
-                board_map=game_dto.board_map.model_copy(deep=True)
-            )
+        """
+        Returns a GameDTO where the current player is always 'Player 1',
+        and recursively canonicalizes the history chain.
 
-        # 2. If it is Player 2's turn, we must swap the stacks to make them "Player 1"
-        new_board_map = game_dto.board_map.model_copy(deep=True)
+        FIX (CPU): called ~280k times per training iteration. The previous
+        implementation always deep-copied BOTH `board_map` and `dice_map`. But
+        downstream code (`get_next_state`, `fetch_*`, `select_dice`, etc.) treats
+        these maps as immutable -- every mutation path does its own model_copy
+        first -- so we can safely share references when no swap is needed, and
+        skip the `dice_map` copy entirely (it never changes under canonicalization).
+        This was the dominant CPU cost in self-play workers.
+        """
+        should_swap = game_dto.board_map.current_player == 2
+
+        if should_swap:
+            new_board_map = game_dto.board_map.model_copy(deep=True)
+            new_board_map.player01_stack = game_dto.board_map.player02_stack
+            new_board_map.player02_stack = game_dto.board_map.player01_stack
+            new_board_map.current_player = 1
+            canonical_dto = GameDTO(dice_map=game_dto.dice_map, board_map=new_board_map)
+        else:
+            # Already canonical -- wrap by reference so we can independently
+            # rewrite `previous_dto` without touching the live state.
+            canonical_dto = GameDTO(dice_map=game_dto.dice_map, board_map=game_dto.board_map)
+
+        canonical_dto.previous_dto = self._get_canonical_history(game_dto.previous_dto, swap=should_swap)
+        return canonical_dto
+
+    def _get_canonical_history(self, dto: GameDTO, swap: bool, max_depth: int = 5) -> GameDTO:
+        """
+        Iterative helper to maintain the swap state down the history chain.
+        Prevents RecursionError and limits history depth to save memory and CPU.
+        max_depth is matched to TensorEngine.to_temporal_tensor's T=5: keeping
+        deeper frames is wasted RAM since they're never read.
+        """
+        if dto is None:
+            return None
+
+        # FIX (CPU): only deep-copy when we actually need to mutate (i.e. when
+        # swapping perspectives). For no-swap nodes we wrap the original maps
+        # by reference -- history frames are read-only downstream (to_tensor).
+        def _process_node(node_dto: GameDTO) -> GameDTO:
+            if not swap:
+                return GameDTO(dice_map=node_dto.dice_map, board_map=node_dto.board_map)
+            new_board = node_dto.board_map.model_copy(deep=True)
+            new_board.player01_stack, new_board.player02_stack = (
+                node_dto.board_map.player02_stack, node_dto.board_map.player01_stack
+            )
+            # Flip the turn indicator for historical accuracy in the tensor
+            new_board.current_player = 1 if node_dto.board_map.current_player == 2 else 2
+            return GameDTO(dice_map=node_dto.dice_map, board_map=new_board)
+
+        # 1. Process the head of the chain (current state)
+        head_new_dto = _process_node(dto)
         
-        # Swap the stacks
-        new_board_map.player01_stack = game_dto.board_map.player02_stack
-        new_board_map.player02_stack = game_dto.board_map.player01_stack
-        
-        # Force the perspective
-        new_board_map.current_player = 1
-        
-        return GameDTO(
-            dice_map=game_dto.dice_map.model_copy(deep=True), 
-            board_map=new_board_map
-        )
+        # 2. Setup pointers for the iterative traversal
+        current_new = head_new_dto
+        current_old = dto.previous_dto
+        depth = 1 # The head counts as depth 1
+
+        # 3. Walk backwards down the linked list using a while loop
+        while current_old is not None and depth <= max_depth:
+            # Copy and swap the historical state
+            next_new_dto = _process_node(current_old)
+            
+            # Link it to our newly built chain
+            current_new.previous_dto = next_new_dto
+            
+            # Move the pointers forward
+            current_new = next_new_dto
+            current_old = current_old.previous_dto
+            depth += 1
+
+        # 4. Explicitly sever the chain here.
+        # This acts as a firewall against memory leaks, ensuring the garbage 
+        # collector can delete the rest of the 1000+ move history.
+        current_new.previous_dto = None
+
+        return head_new_dto

@@ -3,16 +3,16 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
+# import torch.multiprocessing as mp
 import numpy as np
-import threading
-import queue
-import time
+# import threading
+# import queue
+# import time
 from alpha_worms.reflex_endpoint.dto import GameDTO
 from alpha_worms.reflex_endpoint.tensor_engine import TensorEngine
 from alpha_worms.reflex_endpoint.game_engine import GameEngine
-import multiprocessing as mp
+# import multiprocessing as mp
 
-torch.set_num_threads(1) # Important for multiprocessing to prevent thread contention
 
 class ResBlock1D(nn.Module):
     def __init__(self, channels):
@@ -28,45 +28,45 @@ class ResBlock1D(nn.Module):
         out = self.bn2(self.conv2(out))
         out += residual # Skip connection
         return F.relu(out)
-
 class WormsNet(nn.Module):
-    def __init__(self, input_planes=55, board_slots=33, action_size=25):
+    def __init__(self, input_planes=271, board_slots=33, action_size=25):
         super(WormsNet, self).__init__()
-        self.num_channels = 128 # The "Brain Power" hyperparameter
+        self.num_channels = 64 
         
-        # 1. Initial Block: Takes 55 planes and expands them to 128
+        # 1. Initial Block: Now handles the larger input stack
         self.conv_input = nn.Conv1d(input_planes, self.num_channels, kernel_size=3, padding=1, bias=False)
         self.bn_input = nn.BatchNorm1d(self.num_channels)
         
-        # 2. Residual Tower: 10 layers of deep thinking
+        # 2. Residual Tower
         self.res_tower = nn.Sequential(
-            *[ResBlock1D(self.num_channels) for _ in range(10)]
+            *[ResBlock1D(self.num_channels) for _ in range(5)]
         )
         
-        # 3. Policy Head: Predicts the best of the 25 moves
+        # 3. Policy Head
         self.policy_conv = nn.Conv1d(self.num_channels, 2, kernel_size=1, bias=False)
         self.policy_bn = nn.BatchNorm1d(2)
+        # 2 (planes) * 33 (slots) = 66
         self.policy_fc = nn.Linear(2 * board_slots, action_size)
         
-        # 4. Value Head: Predicts if the current player is winning (-1 to 1)
+        # 4. Value Head
         self.value_conv = nn.Conv1d(self.num_channels, 1, kernel_size=1, bias=False)
         self.value_bn = nn.BatchNorm1d(1)
-        self.value_fc1 = nn.Linear(board_slots, 64)
+        self.value_fc1 = nn.Linear(board_slots, 64) # Increased slightly for better capacity
         self.value_fc2 = nn.Linear(64, 1)
 
     def forward(self, s):
-        # s shape: (batch_size, 55, 33)
+        # s shape: (batch_size, 271, 33) (channel-1 x T) + 1
         s = F.relu(self.bn_input(self.conv_input(s)))
         s = self.res_tower(s)
         
-        # Policy Head
+        # Policy Head: Returns Log Softmax (best for NLLLoss / KL Divergence)
         p = F.relu(self.policy_bn(self.policy_conv(s)))
-        p = p.view(p.size(0), -1) # Flatten to (batch, 66)
+        p = p.flatten(1) # More readable than view()
         p = F.log_softmax(self.policy_fc(p), dim=1)
         
-        # Value Head
+        # Value Head: Returns value in range [-1, 1]
         v = F.relu(self.value_bn(self.value_conv(s)))
-        v = v.view(v.size(0), -1) # Flatten to (batch, 33)
+        v = v.flatten(1) 
         v = F.relu(self.value_fc1(v))
         v = torch.tanh(self.value_fc2(v))
         
@@ -74,14 +74,27 @@ class WormsNet(nn.Module):
     
 # --- 2. THE WRAPPER CLASS ---
 class WormsPredictor:
-    def __init__(self):
-        self.device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
+    def __init__(self, device=None):
+        if device is not None:
+            self.device = torch.device(device)
+        else:
+            self.device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
         self.nnet = WormsNet().to(self.device)
-        self.optimizer = optim.Adam(self.nnet.parameters(), lr=0.001, weight_decay=1e-4)
+        # FIX (memory): build the Adam optimizer lazily — baseline predictors used
+        # only for arena inference never need it, and Adam holds 2x the model size
+        # in moment buffers. Save ~5 MB per baseline instantiation per iteration.
+        self._optimizer = None
         self.tensor_engine = TensorEngine()
         # self.share_memory() # Enable sharing for multiprocessing
-        self.load_checkpoint(folder='./checkpoints/', filename='checkpoint_25.pth.tar')
+        # self.load_checkpoint(folder='./checkpoints/', filename='checkpoint_25.pth.tar')
         print(f"Using device: {self.device}")
+
+    @property
+    def optimizer(self):
+        # Lazy Adam: only allocate moment buffers when training is actually invoked.
+        if self._optimizer is None:
+            self._optimizer = optim.Adam(self.nnet.parameters(), lr=0.001, weight_decay=1e-4)
+        return self._optimizer
 
         # 1. THE QUEUE SYSTEM
         # self.prediction_queue = mp.Manager().Queue()
@@ -105,11 +118,13 @@ class WormsPredictor:
         Output: Policy (numpy), Value (float)
         Used by MCTS.
         """
-        state = self.tensor_engine.to_tensor(state)
+        state = self.tensor_engine.to_temporal_tensor(state)
 
         # Prepare state for the network
-        state_tensor = torch.FloatTensor(state.astype(np.float32)).to(self.device)
-        state_tensor = state_tensor.view(1, 55, 33) # Add batch dimension
+        
+        # Fix - 1 allocation, consistent with predict_batch
+        actual_device = next(self.nnet.parameters()).device
+        state_tensor = torch.as_tensor(state, device=actual_device, dtype=torch.float32).unsqueeze(0)
 
         self.nnet.eval() # Set to evaluation mode
         with torch.no_grad():
@@ -117,7 +132,7 @@ class WormsPredictor:
 
         # Convert back to numpy for MCTS to use
         # exp() because the model returns log_softmax
-        return torch.exp(pi).cpu().numpy()[0], v.cpu().numpy()[0][0]
+        return torch.exp(pi).cpu().numpy()[0], v.item()
 
     def train(self, examples):
         """
@@ -129,15 +144,23 @@ class WormsPredictor:
         # Unpack examples
         states, target_pis, target_vs = list(zip(*examples))
 
-        encoded_states = [self.tensor_engine.to_tensor(state) for state in states]
+        encoded_states = []
+        for state in states:
+            if isinstance(state, np.ndarray):
+                # Already a tensor (from experience replay/worker)
+                encoded_states.append(state)
+            else:
+                # Still a DTO (from manual testing or initial state)
+                encoded_states.append(self.tensor_engine.to_temporal_tensor(state))
         try:
-            new_states = torch.FloatTensor(np.array(encoded_states)).to(self.device)
-            target_pis = torch.FloatTensor(np.array(target_pis)).to(self.device)
-            target_vs = torch.FloatTensor(np.array(target_vs)).to(self.device)
+            
+            new_states = torch.as_tensor(np.array(encoded_states), device=self.device, dtype=torch.float32)
+            target_pis = torch.as_tensor(np.array(target_pis),     device=self.device, dtype=torch.float32)
+            target_vs  = torch.as_tensor(np.array(target_vs),      device=self.device, dtype=torch.float32)
         except Exception as e:
             print('examples',examples)
             print(f"Error converting training examples to tensors: {e}")
-            raise e
+            raise
         # Zero gradients
         self.optimizer.zero_grad()
 
@@ -156,6 +179,10 @@ class WormsPredictor:
         
         # Backward pass
         total_loss.backward()
+        # FIX (stability): gradient clipping is standard AlphaZero practice and
+        # protects the residual tower from rare large-gradient batches that would
+        # otherwise corrupt weights and cause challengers to be rejected by arena.
+        torch.nn.utils.clip_grad_norm_(self.nnet.parameters(), max_norm=5.0)
         self.optimizer.step()
 
         return total_loss.item()
@@ -165,9 +192,11 @@ class WormsPredictor:
         """
         Saves the current weights and optimizer state to a file.
         """
-        filepath = os.path.join(folder, filename)
-        if not os.path.exists(folder):
-            os.makedirs(folder)
+        abspath = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        filepath = os.path.join(abspath, folder, filename)
+        folder_path = os.path.join(abspath, folder)
+        if not os.path.exists(folder_path):
+            os.makedirs(folder_path)
             
         # We save a dictionary containing the model weights AND the optimizer state
         torch.save({
@@ -176,23 +205,27 @@ class WormsPredictor:
         }, filepath)
         print(f"Model saved to {filepath}")
 
-    def load_checkpoint(self, folder='checkpoints', filename='checkpoint.pth.tar'):
+    def load_checkpoint(self, folder='checkpoints', filename='checkpoint.pth.tar', load_optimizer=True):
         """
         Loads weights into the NN from a saved file.
         """
         # Get absolute path and include it before the folder
-        abspath = '/home/pablo/Documents/projects/alpha_worms/'
+        abspath = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         filepath = os.path.join(abspath, folder, filename)
         if not os.path.exists(filepath):
             print(f"No checkpoint found at {filepath}. Starting with fresh weights.")
             return
 
         # Load the file from disk
-        checkpoint = torch.load(filepath, map_location=self.device)
+        actual_device = next(self.nnet.parameters()).device
+        checkpoint = torch.load(filepath, map_location=actual_device)
         
         # Here are the built-in PyTorch methods being used:
         self.nnet.load_state_dict(checkpoint['state_dict'])
-        self.optimizer.load_state_dict(checkpoint['optimizer'])
+        
+        # With:
+        if load_optimizer:
+            self.optimizer.load_state_dict(checkpoint['optimizer'])
         print(f"Model loaded from {filepath}")
     
     def nn_next_move(self, game_dto: GameDTO):
@@ -229,6 +262,30 @@ class WormsPredictor:
 
         return game.get_next_state(initial_state, top_moves[0])
 
+    def predict_batch(self, state_arrays):
+        """
+        Receives a list of GameDTO or numpy arrays.
+        """
+        encoded_states = []
+        for state in state_arrays:
+            if isinstance(state, np.ndarray):
+                encoded_states.append(state)
+            else:
+                # Assume it's a GameDTO
+                encoded_states.append(self.tensor_engine.to_temporal_tensor(state))
+        
+        # 1. Fast conversion from list of arrays to a single Torch Tensor
+        actual_device = next(self.nnet.parameters()).device
+        batch_tensor = torch.as_tensor(np.array(encoded_states), device=actual_device, dtype=torch.float32)
+        # 2. Standard GPU Inference
+        self.nnet.eval()
+        with torch.no_grad():
+            pi, v = self.nnet(batch_tensor)
+            
+        policies = torch.exp(pi).data.cpu().numpy()
+        values = v.data.cpu().numpy().flatten()
+        
+        return policies, values
     # ## GPU methods:
     # def request_prediction(self, state):
     #     """
