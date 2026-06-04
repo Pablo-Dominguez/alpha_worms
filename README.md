@@ -1,4 +1,3 @@
-
 # Alpha Worms
 
 AlphaZero implementation for **Heckmeck** (Pickomino) — a two-player dice game where players
@@ -15,6 +14,9 @@ The NN (`WormsNet`) is a 5-block ResNet1D with 64 channels (~180K parameters).
 pip install poetry
 poetry install
 ```
+
+> 💡 **Tip for Dual Local/Cloud Dev**: To prevent Poetry from downloading a massive generic PyTorch wheel over a cloud instance's pre-configured CUDA setup, add an environment marker to your `pyproject.toml`:
+> `torch = { version = "^2.10.0", markers = "sys_platform != 'linux'" }`
 
 ## Local Training
 
@@ -51,15 +53,32 @@ Default config (RTX 3050 Ti, 16-core CPU):
 - **Total disk: < 300 MB** regardless of run length
 
 Expected speed: **~22–24 min/iter** (self-play ~15 min + arena ~6–8 min + training ~1–2 min).
+
+---
+
 ## Cloud Training (Vast.ai)
 
 The bottleneck is CPU parallelism (MCTS + arena games), not GPU VRAM.
 WormsNet is tiny (~2 MB checkpoint) — any GPU with ≥ 4 GB VRAM works.
 
-**Recommended instance**: RTX 3090, ≥ 32 CPU cores (~$0.20–0.25/hr on Vast.ai).
+### 1. Recommended Host Selection Criteria
+When renting an instance on Vast.ai, ensure your hardware filters match or exceed these balances to avoid out-of-memory errors:
+* **GPU:** 1x RTX 3090 (or similar)
+* **CPU Cores:** ≥ 32 cores (Crucial for MCTS simulations)
+* **System RAM:** ≥ 64 GB (Rule of thumb: 1.5–2 GB RAM per core to protect against OOM process killing)
+* **Disk Allocation:** 40–50 GB (More than enough for setup, logs, and checkpoints without wasting stopped-state storage money)
 
-Recommended config changes in `gpu_test.py` for a 32-core instance:
+### 2. Required Docker Configurations
+Before deploying, edit your Vast.ai Template **Docker Create Options** or **Extra Arguments** text box to include:
+```text
+--shm-size=16g --ulimit nofile=1000000:1000000
+```
 
+> ⚠️ **CRITICAL ENVIRONMENT WARNING**: 
+> 1. **Shared Memory (`--shm-size=16g`):** Default Docker templates limit shared memory (`/dev/shm`) to 64 MB. Because `torch.multiprocessing` utilizes system shared memory to seamlessly share tensors and game states across your 32 worker threads, a restrictive default will cause your pipeline to crash instantly with a silent `Bus error (core dumped)`.
+> 2. **File Descriptors (`--ulimit nofile=...`):** Spawning 32 workers utilizing pipes/queues opens hundreds of concurrent connections. Failing to lift the standard 1024 open file limit results in a mid-run `Too many open files` crash.
+
+### 3. Recommended Config Changes (`gpu_test.py` for 32 Cores)
 ```python
 'num_iterations': 100,   # longer run
 'num_episodes': 28,      # fill the extra cores (cpu_count - 2)
@@ -72,26 +91,32 @@ Recommended config changes in `gpu_test.py` for a 32-core instance:
 > **Storage note (32 cores)**: each history pkl is ≈ 98 MB (28 eps × 100 moves × 35 KB).
 > Five files = ~490 MB. Total cloud disk including checkpoints: **< 600 MB**.
 
-Setup on the cloud instance (use a PyTorch base image with CUDA + Python 3.12):
+### 4. Instance Setup and Execution
+Deploy using a PyTorch base image containing CUDA + Python 3.12 (e.g., `pytorch/pytorch:latest`).
 
-1. Sync your project files to the instance:
+**Step 1: Sync your project files to the instance**
 ```bash
 rsync -avz --exclude='checkpoints/' --exclude='*.db' --exclude='.venv/' \
     <local>:/home/pablo/Documents/projects/alpha_worms/ ./alpha_worms/
 ```
 
-2. Run the environment configuration and boot your training session:
+**Step 2: Initialize environment and run using Tmux**
+Always launch inside a `tmux` session so that transient network drops or closing your local laptop does not send a hang-up signal (`SIGHUP`) and kill your multi-hour pipeline.
 ```bash
 cd alpha_worms
-# Automates official Poetry installation, configures PATH, and enables system-site-packages inheriting
+
+# Automates official Poetry installation, fixes PATH, and allows system package inheriting
 bash setup_vast.sh 
 source ~/.bashrc
-
 poetry install
+
+# Open a persistent detached window session
+tmux new -s alpha_run
+
+# Inside the tmux window, execute training:
 python -u gpu_test.py 2>&1 | tee gpu_test_output.log
 ```
-
-> ⚠️ **CRITICAL MULTIPROCESSING WARNING**: Before deploying to Vast.ai, ensure your instance is explicitly configured with custom launch options set to `--shm-size=16gb` or `--ipc=host`. By default, Vast containers may restrict shared memory (`/dev/shm`) to 64 MB. Because `torch.multiprocessing` utilizes system shared memory to pass game states and tensors across your 32 worker threads, a restrictive default setting will crash your training pipeline immediately with a silent `Bus error` or memory allocation fault.
+*To disconnect safely from tmux without killing the run: Press `Ctrl+B`, let go, then hit `D`.* *To reconnect later to check progress: SSH back into the instance and run `tmux attach -t alpha_run`.*
 
 > Game recording (`worms_logger`) is optional and disabled by default unless `DATABASE_URL`
 > is set. No extra setup needed for cloud.
@@ -100,12 +125,14 @@ python -u gpu_test.py 2>&1 | tee gpu_test_output.log
 ~28–30 hours × $0.22/hr ≈ **$6–7 total**.
 
 After training, sync back just the checkpoint:
-
 ```bash
 rsync -avz --progress \
     <user@host>:~/alpha_worms/checkpoints/checkpoint_best.pth.tar \
     ./checkpoints/
 ```
+
+---
+
 ## Extracting the Best Model from Vast.ai
 
 ### Check disk usage before downloading
@@ -181,6 +208,8 @@ rm -f checkpoints/checkpoint_best.pth.tar checkpoints/checkpoint_*.pth.tar
 rm -f checkpoints/history/*.pkl checkpoints/best_iteration.txt
 ```
 
+---
+
 ## Arena — How Challenger Promotion Works
 
 After each iteration the newly-trained model (challenger) plays `arenaCompare` games against
@@ -191,6 +220,8 @@ All CPU threads are used for arena games (`min(arena_games, cpu_count - 2)`).
 > **Note**: draw rate is typically 85–90% early in training while the model is still learning.
 > Raising `arenaCompare` to 25–30 gives more decisive games per arena and reduces
 > the chance of a noise-driven promotion.
+
+---
 
 ## Inference
 

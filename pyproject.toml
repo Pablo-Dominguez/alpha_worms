@@ -10,7 +10,10 @@ python = ">=3.12,<3.15"
 numpy = "^2.3.2"
 pydantic = "^2.12.5"
 matplotlib = "^3.10.0"
-torch = "^2.10.0"
+
+# Automatically skips installing from PyPI on Vast.ai (Linux), 
+# but installs automatically on your local laptop (Windows/Mac).
+torch = { version = "^2.10.0", markers = "sys_platform != 'linux'" }
 
 
 [tool.poetry.group.dev.dependencies]
