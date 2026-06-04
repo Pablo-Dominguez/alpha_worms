@@ -106,7 +106,7 @@ class RawEngine:
             if len(new_pieces_version.board_pieces) == 0:
                 tmp_dto = GameDTO(dice_map=old_dice_model, board_map=new_pieces_version)
                 winner = self.get_score_winner(tmp_dto)
-                print(f"Player {winner} wins! Game over.")
+                # print(f"Player {winner} wins! Game over.")
             
             return self.end_turn(GameDTO(dice_map=old_dice_model, board_map=new_pieces_version, previous_dto=None))
         
