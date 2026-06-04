@@ -96,7 +96,12 @@ Deploy using a PyTorch base image containing CUDA + Python 3.12 (e.g., `pytorch/
 
 **Step 1: Sync your project files to the instance**
 ```bash
-rsync -avz --exclude='checkpoints/' --exclude='*.db' --exclude='.venv/' \
+rsync -avz \
+    --exclude='checkpoints/' \
+    --exclude='*.db' \
+    --exclude='.venv/' \
+    --exclude='eval/' \
+    --exclude='tests/' \
     <local>:/home/pablo/Documents/projects/alpha_worms/ ./alpha_worms/
 ```
 
