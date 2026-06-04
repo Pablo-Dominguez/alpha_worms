@@ -51,7 +51,6 @@ Default config (RTX 3050 Ti, 16-core CPU):
 - **Total disk: < 300 MB** regardless of run length
 
 Expected speed: **~22–24 min/iter** (self-play ~15 min + arena ~6–8 min + training ~1–2 min).
-
 ## Cloud Training (Vast.ai)
 
 The bottleneck is CPU parallelism (MCTS + arena games), not GPU VRAM.
@@ -75,13 +74,24 @@ Recommended config changes in `gpu_test.py` for a 32-core instance:
 
 Setup on the cloud instance (use a PyTorch base image with CUDA + Python 3.12):
 
+1. Sync your project files to the instance:
 ```bash
-pip install poetry
 rsync -avz --exclude='checkpoints/' --exclude='*.db' --exclude='.venv/' \
     <local>:/home/pablo/Documents/projects/alpha_worms/ ./alpha_worms/
-cd alpha_worms && poetry install
+```
+
+2. Run the environment configuration and boot your training session:
+```bash
+cd alpha_worms
+# Automates official Poetry installation, configures PATH, and enables system-site-packages inheriting
+bash setup_vast.sh 
+source ~/.bashrc
+
+poetry install
 python -u gpu_test.py 2>&1 | tee gpu_test_output.log
 ```
+
+> ⚠️ **CRITICAL MULTIPROCESSING WARNING**: Before deploying to Vast.ai, ensure your instance is explicitly configured with custom launch options set to `--shm-size=16gb` or `--ipc=host`. By default, Vast containers may restrict shared memory (`/dev/shm`) to 64 MB. Because `torch.multiprocessing` utilizes system shared memory to pass game states and tensors across your 32 worker threads, a restrictive default setting will crash your training pipeline immediately with a silent `Bus error` or memory allocation fault.
 
 > Game recording (`worms_logger`) is optional and disabled by default unless `DATABASE_URL`
 > is set. No extra setup needed for cloud.
@@ -96,7 +106,6 @@ rsync -avz --progress \
     <user@host>:~/alpha_worms/checkpoints/checkpoint_best.pth.tar \
     ./checkpoints/
 ```
-
 ## Extracting the Best Model from Vast.ai
 
 ### Check disk usage before downloading
