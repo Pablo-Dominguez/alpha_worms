@@ -96,13 +96,14 @@ Deploy using a PyTorch base image containing CUDA + Python 3.12 (e.g., `pytorch/
 
 **Step 1: Sync your project files to the instance**
 ```bash
-rsync -avz \
+rsync -avz -e 'ssh -p 40124' \
     --exclude='checkpoints/' \
     --exclude='*.db' \
     --exclude='.venv/' \
     --exclude='eval/' \
     --exclude='tests/' \
-    <local>:/home/pablo/Documents/projects/alpha_worms/ ./alpha_worms/
+    /home/pablo/Documents/projects/alpha_worms/ \
+    root@78.141.73.233:/workspace/alpha_worms/
 ```
 
 **Step 2: Initialize environment and run using Tmux**
@@ -116,7 +117,10 @@ source ~/.bashrc
 poetry install
 
 # Open a persistent detached window session
-tmux new -s alpha_run
+# tmux new -s alpha_run
+
+# Enable env
+eval $(poetry env activate)
 
 # Inside the tmux window, execute training:
 python -u gpu_test.py 2>&1 | tee gpu_test_output.log

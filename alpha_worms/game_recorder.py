@@ -54,6 +54,10 @@ class GameRecorder:
             match_id = db.start_match(player1_id=1, player2_id=2)
             logger.info(f"[GameRecorder] Recording game → match_id={match_id}")
             return cls(match_id, db)
+        except ModuleNotFoundError as exc:
+            # worms_logger is optional; avoid noisy warnings when it's not installed.
+            logger.debug(f"[GameRecorder] worms_logger not available: {exc}")
+            return None
         except Exception as exc:
             logger.warning(f"[GameRecorder] Could not start match: {exc}")
             return None
@@ -76,6 +80,9 @@ class GameRecorder:
         try:
             from worms_logger import TurnRecorder
             self._record_step(state_before, action, state_after, TurnRecorder)
+        except ModuleNotFoundError as exc:
+            # worms_logger is optional; silently skip recording when missing.
+            logger.debug(f"[GameRecorder] worms_logger not available in step(): {exc}")
         except Exception as exc:
             logger.warning(f"[GameRecorder] step() error (non-fatal): {exc}")
 
@@ -165,10 +172,14 @@ class GameRecorder:
                 self._log_and_reset()
 
     def _log_and_reset(self) -> None:
-        self._db.log_turn(self._match_id, self._turn_number, self._turn_string)
-        logger.debug(
-            f"[GameRecorder] Logged turn {self._turn_number}: {self._turn_string}"
-        )
+        try:
+            self._db.log_turn(self._match_id, self._turn_number, self._turn_string)
+            logger.debug(
+                f"[GameRecorder] Logged turn {self._turn_number}: {self._turn_string}"
+            )
+        except Exception as exc:
+            # Swallow DB/logging errors so training is never interrupted.
+            logger.debug(f"[GameRecorder] log_turn skipped: {exc}")
         self._turn_number += 1
         self._turn_string  = ""
 
@@ -186,5 +197,8 @@ class GameRecorder:
                 match.status = "finished"
                 session.commit()
             session.close()
+        except ModuleNotFoundError as exc:
+            # worms_logger missing: nothing to finalize, silently ignore.
+            logger.debug(f"[GameRecorder] worms_logger not available in finalize: {exc}")
         except Exception as exc:
             logger.warning(f"[GameRecorder] Could not finalize match: {exc}")
