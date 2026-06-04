@@ -70,23 +70,29 @@ if __name__ == '__main__':
     #   - Each history pkl  ≈ 28 × 100 × 35 KB ≈  98 MB
     #   - max_history_files=5  → ~490 MB history disk
     #   - keep_last_checkpoints=3  → ~15 MB iteration checkpoints
+    # Dynamically pick a sensible `num_episodes` based on available CPU cores.
+  # Reserve 4 cores for main process orchestrations, GPU batching, and OS overhead.
+    cpu_count = mp.cpu_count()
+    default_num_episodes = max(1, cpu_count - 4)
+    print(f"Detected {cpu_count} CPU cores; setting num_episodes={default_num_episodes} for maximum stability.")
+
     args = {
         'lr': 0.001,                 # reduce if loss plateaus
         'numMCTSSims': 80,           # MCTS simulations per move
         'cpuct': 1.41,               # PUCT exploration constant
-        'num_iterations': 100,        # iterations per run
-        'num_episodes': 28,          # self-play games/iter (≤ cpu_count - 2)
+        'num_iterations': 100,       # iterations per run
+        'num_episodes': default_num_episodes,  # self-play games/iter (dynamically scales to 60)
         'batch_size': 256,           # training mini-batch size
-        'max_buffer_size': 40000,    # replay buffer cap (RAM: 20k × 35 KB ≈ 684 MB)
+        'max_buffer_size': 100000,   # OPTIMIZED: Replay buffer cap (RAM: 100k × 35 KB ≈ 3.5 GB)
         'checkpoint': './checkpoints/',
         'log_file': 'gpu_test_output.log',
         'train_epochs': 20,          # gradient steps per iteration
-        'arenaCompare': 30,          # arena games per iteration
+        'arenaCompare': 40,          # OPTIMIZED: Blasts past the 90% draw noise while easily fitting in your 60 threads
         'arenaThreshold': 0.55,      # challenger win-rate to promote
         'arenaSimMultiplier': 1,     # arena MCTS multiplier (1 = same as self-play)
         # --- Storage safety knobs ---
         'keep_last_checkpoints': 3,  # per-iteration .pth.tar files to keep on disk
-        'max_history_files': 20,      # pkl history files to keep (older ones auto-pruned)
+        'max_history_files': 20,     # OPTIMIZED: Keeps the last 20 iterations to fully satisfy the 100k buffer
     }
 
     # 3. Initialize the Trainer
