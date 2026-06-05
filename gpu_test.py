@@ -73,7 +73,7 @@ if __name__ == '__main__':
     # Dynamically pick a sensible `num_episodes` based on available CPU cores.
   # Reserve 4 cores for main process orchestrations, GPU batching, and OS overhead.
     cpu_count = mp.cpu_count()
-    default_num_episodes = 60 #max(1, cpu_count - 4)
+    default_num_episodes = 32 #max(1, cpu_count - 4)
     print(f"Detected {cpu_count} CPU cores; setting num_episodes={default_num_episodes} for maximum stability.")
 
     args = {
@@ -82,17 +82,17 @@ if __name__ == '__main__':
         'cpuct': 1.41,               # PUCT exploration constant
         'num_iterations': 100,       # iterations per run
         'num_episodes': default_num_episodes,  # self-play games/iter (dynamically scales to 60)
-        'batch_size': 1024,           # training mini-batch size
+        'batch_size': 4096,           # training mini-batch size
         'max_buffer_size': 100000,   # OPTIMIZED: Replay buffer cap (RAM: 100k × 35 KB ≈ 3.5 GB)
         'checkpoint': './checkpoints/',
         'log_file': 'gpu_test_output.log',
         'train_epochs': 10,          # gradient steps per iteration
-        'arenaCompare': 40,          # OPTIMIZED: Blasts past the 90% draw noise while easily fitting in your 60 threads
+        'arenaCompare': 32,          # OPTIMIZED: Blasts past the 90% draw noise while easily fitting in your 60 threads
         'arenaThreshold': 0.55,      # challenger win-rate to promote
         'arenaSimMultiplier': 1,     # arena MCTS multiplier (1 = same as self-play)
         # --- Storage safety knobs ---
         'keep_last_checkpoints': 3,  # per-iteration .pth.tar files to keep on disk
-        'max_history_files': 20,     # OPTIMIZED: Keeps the last 20 iterations to fully satisfy the 100k buffer
+        'max_history_files': 50,     # OPTIMIZED: Keeps the last 20 iterations to fully satisfy the 100k buffer
     }
 
     # 3. Initialize the Trainer
