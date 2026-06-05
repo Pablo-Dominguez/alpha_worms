@@ -212,7 +212,7 @@ class Worms:
             self.nnet.load_checkpoint(folder=folder, filename=latest_file)
             try:
                 if hasattr(torch, "compile"):
-                    self.nnet.model = torch.compile(self.nnet.model)
+                    self.nnet.model = torch.compile(self.nnet.nnet)
                     logger.info(f"Successfully compiled nnet model.")
             except Exception as e:
                 logger.warning(f"Could not compile nnet model: {e}")
@@ -538,7 +538,7 @@ class Worms:
             self.nnet.load_checkpoint(folder=self.args['checkpoint'], filename='checkpoint_best.pth.tar')
             try:
                 if hasattr(torch, "compile"):
-                    self.nnet.model = torch.compile(self.nnet.model)
+                    self.nnet.model = torch.compile(self.nnet.nnet)
                     logger.info(f"Successfully compiled nnet model.")
             except Exception as e:
                 logger.warning(f"Could not compile nnet model after loading best checkpoint: {e}")
@@ -758,7 +758,7 @@ class Worms:
                     baseline_predictor.load_checkpoint(folder=self.args['checkpoint'], filename='checkpoint_best.pth.tar', load_optimizer=False)
                     try:
                         if hasattr(torch, "compile"):
-                            baseline_predictor.model = torch.compile(baseline_predictor.model)
+                            baseline_predictor.model = torch.compile(baseline_predictor.nnet)
                             logger.info(f"Successfully compiled baseline predictor model.")
                     except Exception as e:
                         logger.warning(f"Could not compile baseline predictor model: {e}")
