@@ -96,14 +96,14 @@ Deploy using a PyTorch base image containing CUDA + Python 3.12 (e.g., `pytorch/
 
 **Step 1: Sync your project files to the instance**
 ```bash
-rsync -avz -e 'ssh -p 40142' \
+rsync -avz -e 'ssh -p 42652' \
     --exclude='checkpoints/' \
     --exclude='*.db' \
     --exclude='.venv/' \
     --exclude='eval/' \
     --exclude='tests/' \
     /home/pablo/Documents/projects/alpha_worms/ \
-    root@78.141.73.233:/workspace/alpha_worms/
+    root@171.247.180.119:/workspace/alpha_worms/
 ```
 
 **Step 2: Initialize environment and run using Tmux**
@@ -134,8 +134,9 @@ python -u gpu_test.py 2>&1 | tee gpu_test_output.log
 ~28–30 hours × $0.22/hr ≈ **$6–7 total**.
 
 After training, sync back just the checkpoint:
+
 ```bash
-rsync -avz --progress -e 'ssh -p 40142'     root@78.141.73.233:/workspace/alpha_worms/checkpoints/checkpoint_best.pth.tar     ./checkpoints/
+rsync -avz --progress -e 'ssh -p 42652'     root@171.247.180.119:/workspace/alpha_worms/checkpoints/checkpoint_best.pth.tar     ./checkpoints/
 ```
 
 ---

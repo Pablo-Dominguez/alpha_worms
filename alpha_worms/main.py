@@ -210,6 +210,12 @@ class Worms:
         if latest_file:
             print(f"Loading checkpoint: {latest_file}")
             self.nnet.load_checkpoint(folder=folder, filename=latest_file)
+            try:
+                if hasattr(torch, "compile"):
+                    self.nnet.model = torch.compile(self.nnet.model)
+                    logger.info(f"Successfully compiled nnet model.")
+            except Exception as e:
+                logger.warning(f"Could not compile nnet model: {e}")
             return latest_iter
         
         return 0
@@ -530,6 +536,12 @@ class Worms:
         if os.path.exists(best_path):
             start_iter = self._get_latest_checkpoint_iter()
             self.nnet.load_checkpoint(folder=self.args['checkpoint'], filename='checkpoint_best.pth.tar')
+            try:
+                if hasattr(torch, "compile"):
+                    self.nnet.model = torch.compile(self.nnet.model)
+                    logger.info(f"Successfully compiled nnet model.")
+            except Exception as e:
+                logger.warning(f"Could not compile nnet model after loading best checkpoint: {e}")
             best_iter_file = os.path.join(self.args['checkpoint'], 'best_iteration.txt')
             if os.path.exists(best_iter_file):
                 with open(best_iter_file, 'r') as f:
@@ -744,6 +756,12 @@ class Worms:
                     # during the ~30-min self-play + training phase (saves one full model copy).
                     baseline_predictor = WormsPredictor(device='cpu')
                     baseline_predictor.load_checkpoint(folder=self.args['checkpoint'], filename='checkpoint_best.pth.tar', load_optimizer=False)
+                    try:
+                        if hasattr(torch, "compile"):
+                            baseline_predictor.model = torch.compile(baseline_predictor.model)
+                            logger.info(f"Successfully compiled baseline predictor model.")
+                    except Exception as e:
+                        logger.warning(f"Could not compile baseline predictor model: {e}")
                     challenger_passed = self.arena_compare(self.nnet, baseline_predictor)
                     if challenger_passed:
                         self.save_best_checkpoint(checkpoint_name, i)
