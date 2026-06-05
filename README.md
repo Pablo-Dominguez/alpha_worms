@@ -96,7 +96,7 @@ Deploy using a PyTorch base image containing CUDA + Python 3.12 (e.g., `pytorch/
 
 **Step 1: Sync your project files to the instance**
 ```bash
-rsync -avz -e 'ssh -p 40124' \
+rsync -avz -e 'ssh -p 40142' \
     --exclude='checkpoints/' \
     --exclude='*.db' \
     --exclude='.venv/' \
@@ -135,9 +135,7 @@ python -u gpu_test.py 2>&1 | tee gpu_test_output.log
 
 After training, sync back just the checkpoint:
 ```bash
-rsync -avz --progress \
-    <user@host>:~/alpha_worms/checkpoints/checkpoint_best.pth.tar \
-    ./checkpoints/
+rsync -avz --progress -e 'ssh -p 40142'     root@78.141.73.233:/workspace/alpha_worms/checkpoints/checkpoint_best.pth.tar     ./checkpoints/
 ```
 
 ---
@@ -160,9 +158,7 @@ ssh <user@host> "ls -lh ~/alpha_worms/checkpoints/*.pth.tar | sort -V"
 best model and is ~5 MB. Download it and nothing else:
 
 ```bash
-rsync -avz --progress \
-    <user@host>:~/alpha_worms/checkpoints/checkpoint_best.pth.tar \
-    ./checkpoints/checkpoint_best.pth.tar
+rsync -avz --progress -e 'ssh -p 40142'     root@78.141.73.233:/workspace/alpha_worms/checkpoints/checkpoint_best.pth.tar     ./checkpoints/
 ```
 
 To also grab the training log:

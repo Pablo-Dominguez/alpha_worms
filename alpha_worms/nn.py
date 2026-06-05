@@ -86,7 +86,7 @@ class WormsPredictor:
         self._optimizer = None
         self.tensor_engine = TensorEngine()
         # self.share_memory() # Enable sharing for multiprocessing
-        # self.load_checkpoint(folder='./checkpoints/', filename='checkpoint_25.pth.tar')
+        self.load_checkpoint(folder='./checkpoints/', filename='checkpoint_best.pth.tar')
         print(f"Using device: {self.device}")
 
     @property
