@@ -6,6 +6,7 @@ import re
 import time
 from dataclasses import dataclass
 from datetime import datetime
+from pathlib import Path
 from typing import Deque, Iterable, List, Optional
 
 ITERATION_RE = re.compile(r"^---\s*Iteration\s+(\d+)\s*---")
@@ -14,6 +15,7 @@ ARENA_RE = re.compile(
     re.IGNORECASE,
 )
 SAVE_ITER_RE = re.compile(r"Successfully saved .*iteration_(\d+)_(\d{8})_(\d{6})\.pkl")
+HISTORY_FILE_RE = re.compile(r"iteration_(\d+)_(\d{8})_(\d{6})\.pkl$")
 
 
 @dataclass
@@ -57,6 +59,34 @@ def parse_iteration_save_time(line: str):
     iteration = int(iteration_str)
     saved_time = datetime.strptime(f"{date_str}_{time_str}", "%Y%m%d_%H%M%S")
     return iteration, saved_time
+
+
+def parse_history_filename(filename: str):
+    match = HISTORY_FILE_RE.match(filename)
+    if not match:
+        return None
+    iteration_str, date_str, time_str = match.groups()
+    iteration = int(iteration_str)
+    saved_time = datetime.strptime(f"{date_str}_{time_str}", "%Y%m%d_%H%M%S")
+    return iteration, saved_time
+
+
+def find_iteration_saved_time(iteration: int, history_dir: Path) -> Optional[datetime]:
+    if not history_dir.exists() or not history_dir.is_dir():
+        return None
+    best_time = None
+    for child in history_dir.iterdir():
+        if not child.is_file():
+            continue
+        parsed = parse_history_filename(child.name)
+        if parsed is None:
+            continue
+        file_iteration, file_time = parsed
+        if file_iteration != iteration:
+            continue
+        if best_time is None or file_time > best_time:
+            best_time = file_time
+    return best_time
 
 
 def summarize_stats(records: List[ArenaSummary], windows: Iterable[int]) -> List[str]:
@@ -135,7 +165,7 @@ def read_new_lines(path: str, last_position: int):
         return [], last_position
 
 
-def monitor_log(path: str, interval: float, follow: bool, windows: List[int]):
+def monitor_log(path: str, interval: float, follow: bool, windows: List[int], history_dir: Path):
     records: Deque[ArenaSummary] = collections.deque(maxlen=max(windows) * 2)
     current_iteration: Optional[int] = None
     last_position = 0
@@ -143,7 +173,7 @@ def monitor_log(path: str, interval: float, follow: bool, windows: List[int]):
     print(f"Watching {path}")
     print(
         f" mode={'continuous' if follow else f'poll every {interval:.0f}s'}, "
-        f"summary windows={windows}"
+        f"summary windows={windows}, history_dir={history_dir}"
     )
     print("Press Ctrl+C to stop.\n")
 
@@ -163,6 +193,10 @@ def monitor_log(path: str, interval: float, follow: bool, windows: List[int]):
                         saved_time=None,
                         **arena_result,
                     )
+                    if history_dir is not None:
+                        saved_time = find_iteration_saved_time(current_iteration, history_dir)
+                        if saved_time is not None:
+                            record.saved_time = saved_time
                     records.append(record)
                     print_iteration_record(record)
                     print("Summary:")
@@ -177,6 +211,13 @@ def monitor_log(path: str, interval: float, follow: bool, windows: List[int]):
                         if record.iteration == iteration_num:
                             record.saved_time = saved_time
                             break
+
+        if history_dir is not None:
+            for record in records:
+                if record.saved_time is None:
+                    maybe_time = find_iteration_saved_time(record.iteration, history_dir)
+                    if maybe_time is not None:
+                        record.saved_time = maybe_time
 
         file_size = os.path.getsize(path) if os.path.exists(path) else 0
         if file_size < current_position:
@@ -207,6 +248,11 @@ def build_parser():
         help="Continuously poll the file for updates instead of waiting 10 minutes between checks.",
     )
     parser.add_argument(
+        "--history-dir",
+        default="./checkpoints/history",
+        help="Path to checkpoint history folder containing iteration_*.pkl files.",
+    )
+    parser.add_argument(
         "--windows",
         type=int,
         nargs="*",
@@ -220,7 +266,14 @@ def main():
     args = build_parser().parse_args()
     if args.interval <= 0:
         raise SystemExit("Interval must be a positive number.")
-    monitor_log(args.log_file, args.interval, args.follow, sorted(set(args.windows)))
+    history_dir = Path(args.history_dir)
+    monitor_log(
+        args.log_file,
+        args.interval,
+        args.follow,
+        sorted(set(args.windows)),
+        history_dir,
+    )
 
 
 if __name__ == "__main__":
