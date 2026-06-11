@@ -12,19 +12,15 @@ import pickle
 import os
 import shutil
 from datetime import datetime
-import gc
 import logging
+import gc
 import multiprocessing as py_mp
 
 # Spawn method is set inside learn() to ensure it applies regardless of entry script.
 
-# Configure logging for worker heartbeat
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
-logger = logging.getLogger(__name__)
 
+# This creates a child logger named after the file (e.g., "mcts")
+logger = logging.getLogger(__name__)
 
 def _log_mp_state(tag, processes=None, request_queue=None):
     """Lightweight diagnostics for IPC leak/deadlock triage."""
@@ -838,25 +834,7 @@ class Worms:
         """
         import torch as _torch
         _torch.set_num_threads(1)  # Prevent OpenMP explosion inside each worker process
-        # Configure logging — logging.basicConfig() from the parent is NOT inherited by spawned
-        # subprocesses. Without this, all logger.info/error calls below are completely silent.
-        logging.basicConfig(
-            level=logging.INFO,
-            format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-        )
-        # Spawned workers start with a fresh interpreter: add a FileHandler so
-        # their logger.* output goes to the same log file as the main process.
-        # basicConfig only adds a StreamHandler (stderr); without this, worker
-        # logs are invisible in the file when stderr is not redirected.
-        _log_file = args.get('log_file', 'gpu_test_output.log')
-        _root = logging.getLogger()
-        if not any(isinstance(_h, logging.FileHandler) for _h in _root.handlers):
-            _wfh = logging.FileHandler(_log_file, mode='a', encoding='utf-8')
-            _wfh.setLevel(logging.DEBUG)
-            _wfh.setFormatter(
-                logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-            )
-            _root.addHandler(_wfh)
+        
         # 1. Create the fake predictor
         proxy_nnet = IPCPredictorProxy(worker_id, request_queue, worker_pipe)
 

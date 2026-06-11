@@ -47,11 +47,17 @@ if __name__ == '__main__':
     # missing from the log when only stdout is redirected (> file).
     _LOG_FILE = 'gpu_test_output.log'
     _file_handler = logging.FileHandler(_LOG_FILE, mode='a', encoding='utf-8')
-    _file_handler.setLevel(logging.DEBUG)
+    _file_handler.setLevel(logging.CRITICAL)  # Capture all logs; adjust if you want to filter
     _file_handler.setFormatter(
         logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
     )
-    logging.getLogger().addHandler(_file_handler)
+    root_logger = logging.getLogger()
+    root_logger.addHandler(_file_handler)
+    root_logger.setLevel(logging.CRITICAL)
+
+    # 2. THE MASTER CIRCUIT BREAKER: Disables ALL logs across ALL modules 
+    # (including third-party libraries) that are below the ERROR/CRITICAL level.
+    logging.disable(logging.ERROR)
 
     # 1. Initialize Game and Brain
     game = GameEngine() 
@@ -80,10 +86,10 @@ if __name__ == '__main__':
         'lr': 0.0005,                 # reduce if loss plateaus
         'numMCTSSims': 200,           # MCTS simulations per move
         'cpuct': 1.41,               # PUCT exploration constant
-        'num_iterations': 100,       # iterations per run
+        'num_iterations': 200,       # iterations per run
         'num_episodes': default_num_episodes,  # self-play games/iter (dynamically scales to 60)
         'batch_size': 4096,           # training mini-batch size
-        'max_buffer_size': 100000,   # OPTIMIZED: Replay buffer cap (RAM: 100k × 35 KB ≈ 3.5 GB)
+        'max_buffer_size': 500000,   # OPTIMIZED: Replay buffer cap (RAM: 100k × 35 KB ≈ 3.5 GB)
         'checkpoint': './checkpoints/',
         'log_file': 'gpu_test_output.log',
         'train_epochs': 10,          # gradient steps per iteration
@@ -91,8 +97,8 @@ if __name__ == '__main__':
         'arenaThreshold': 0.55,      # challenger win-rate to promote
         'arenaSimMultiplier': 1,     # arena MCTS multiplier (1 = same as self-play)
         # --- Storage safety knobs ---
-        'keep_last_checkpoints': 3,  # per-iteration .pth.tar files to keep on disk
-        'max_history_files': 50,     # OPTIMIZED: Keeps the last 20 iterations to fully satisfy the 100k buffer
+        'keep_last_checkpoints': 5,  # per-iteration .pth.tar files to keep on disk
+        'max_history_files': 150,     # OPTIMIZED: Keeps the last 20 iterations to fully satisfy the 100k buffer
     }
 
     # 3. Initialize the Trainer
