@@ -83,16 +83,16 @@ if __name__ == '__main__':
     print(f"Detected {cpu_count} CPU cores; setting num_episodes={default_num_episodes} for maximum stability.")
 
     args = {
-        'lr': 0.0005,                 # reduce if loss plateaus
+        'lr': 0.0001,                 # reduce if loss plateaus
         'numMCTSSims': 200,           # MCTS simulations per move
-        'cpuct': 1.41,               # PUCT exploration constant
+        'cpuct': 1.75,               # PUCT exploration constant
         'num_iterations': 200,       # iterations per run
         'num_episodes': default_num_episodes,  # self-play games/iter (dynamically scales to 60)
         'batch_size': 4096,           # training mini-batch size
         'max_buffer_size': 500000,   # OPTIMIZED: Replay buffer cap (RAM: 100k × 35 KB ≈ 3.5 GB)
         'checkpoint': './checkpoints/',
         'log_file': 'gpu_test_output.log',
-        'train_epochs': 10,          # gradient steps per iteration
+        'train_epochs': 5,          # gradient steps per iteration
         'arenaCompare': 32,          # OPTIMIZED: Blasts past the 90% draw noise while easily fitting in your 60 threads
         'arenaThreshold': 0.55,      # challenger win-rate to promote
         'arenaSimMultiplier': 1,     # arena MCTS multiplier (1 = same as self-play)
