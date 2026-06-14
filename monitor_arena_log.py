@@ -16,6 +16,8 @@ ARENA_RE = re.compile(
 )
 SAVE_ITER_RE = re.compile(r"Successfully saved .*iteration_(\d+)_(\d{8})_(\d{6})\.pkl")
 HISTORY_FILE_RE = re.compile(r"iteration_(\d+)_(\d{8})_(\d{6})\.pkl$")
+PASS_RE = re.compile(r"Challenger passed the arena threshold", re.IGNORECASE)
+FAIL_RE = re.compile(r"Challenger (did not pass|failed|didn't pass).*threshold", re.IGNORECASE)
 
 
 @dataclass
@@ -28,6 +30,7 @@ class ArenaSummary:
     decisive: int
     total_games: int
     saved_time: Optional[datetime] = None
+    passed: Optional[bool] = None
 
     @property
     def average_time_seconds(self) -> Optional[float]:
@@ -109,6 +112,9 @@ def summarize_stats(records: List[ArenaSummary], windows: Iterable[int]) -> List
             total_challenger / total_decisive if total_decisive > 0 else 0.0
         )
         average_iteration_time = compute_average_iteration_time(selected)
+        passed_count = sum(1 for r in selected if r.passed is True)
+        failed_count = sum(1 for r in selected if r.passed is False)
+        unknown_count = sum(1 for r in selected if r.passed is None)
 
         lines.append(f"Last {len(selected)} arena iterations:")
         lines.append(
@@ -123,6 +129,21 @@ def summarize_stats(records: List[ArenaSummary], windows: Iterable[int]) -> List
             )
         else:
             lines.append("  avg iteration completion interval: not available")
+        # pass/fail summary
+        known = passed_count + failed_count
+        if known > 0:
+            pass_rate = passed_count / known
+            lines.append(
+                f"  passed iterations={passed_count}, failed={failed_count}, unknown={unknown_count}, pass_rate={pass_rate:.3f}"
+            )
+        else:
+            lines.append(f"  passed iterations={passed_count}, failed={failed_count}, unknown={unknown_count}, pass_rate=N/A")
+        # recent per-iteration outcomes
+        recent = ", ".join(
+            f"{r.iteration}:{('P' if r.passed is True else ('F' if r.passed is False else 'U'))}"
+            for r in selected
+        )
+        lines.append(f"  recent: {recent}")
         lines.append("")
     return lines
 
@@ -186,6 +207,7 @@ def monitor_log(path: str, interval: float, follow: bool, windows: List[int], hi
                     current_iteration = int(match_iter.group(1))
                     continue
 
+                # detect arena numeric result
                 arena_result = parse_arena_results(line)
                 if arena_result and current_iteration is not None:
                     record = ArenaSummary(
@@ -204,6 +226,7 @@ def monitor_log(path: str, interval: float, follow: bool, windows: List[int], hi
                         print(summary_line)
                     continue
 
+                # detect explicit save message with timestamp
                 save_info = parse_iteration_save_time(line)
                 if save_info:
                     iteration_num, saved_time = save_info
@@ -211,6 +234,21 @@ def monitor_log(path: str, interval: float, follow: bool, windows: List[int], hi
                         if record.iteration == iteration_num:
                             record.saved_time = saved_time
                             break
+
+                # detect pass/fail textual outcome lines
+                if PASS_RE.search(line):
+                    for record in reversed(records):
+                        if current_iteration is not None and record.iteration == current_iteration:
+                            record.passed = True
+                            break
+                    continue
+
+                if FAIL_RE.search(line):
+                    for record in reversed(records):
+                        if current_iteration is not None and record.iteration == current_iteration:
+                            record.passed = False
+                            break
+                    continue
 
         if history_dir is not None:
             for record in records:

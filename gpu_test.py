@@ -98,7 +98,7 @@ if __name__ == '__main__':
         'arenaSimMultiplier': 1,     # arena MCTS multiplier (1 = same as self-play)
         # --- Storage safety knobs ---
         'keep_last_checkpoints': 5,  # per-iteration .pth.tar files to keep on disk
-        'max_history_files': 150,     # OPTIMIZED: Keeps the last 20 iterations to fully satisfy the 100k buffer
+        'max_history_files': 70,     # OPTIMIZED: Keeps the last 20 iterations to fully satisfy the 100k buffer
     }
 
     # 3. Initialize the Trainer

@@ -28,6 +28,11 @@ eval $(poetry env activate)
 python -u gpu_test.py 2>&1 | tee gpu_test_output.log
 ```
 
+To monitor arena results and timing in real time while training is running:
+```bash
+python monitor_arena_log.py gpu_test_output.log --follow --history-dir ./checkpoints/history
+```
+
 Checkpoints are saved to `checkpoints/`. Training resumes automatically from the last best
 checkpoint if one exists. To start fresh, delete `checkpoints/history/*.pkl`, `checkpoints/checkpoint_best.pth.tar`,
 and any `checkpoints/checkpoint_*.pth.tar` iteration files.
